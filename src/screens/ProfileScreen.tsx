@@ -9,22 +9,30 @@ import {
   Alert,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
-import BottomNavigation from '../components/BottomNavigation';
+import { useNavigation } from '@react-navigation/native';
+import type { NavigationProp } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Goal, GoalService } from '../services/GoalService';
 import { StoredUser, UserService } from '../services/UserService';
+import { RootStackParamList } from '../types/types';
 
-interface ProfileScreenProps {
-  navigation: any;
-  route: any;
-}
-
-const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation, route }) => {
+const ProfileScreen: React.FC = () => {
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const [currentUser, setCurrentUser] = useState<StoredUser | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [allUsers, setAllUsers] = useState<StoredUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const userId = route?.params?.userId || 'user-cesar-1753750573601';
+  // Obtener userId desde AsyncStorage
+  const getUserId = useCallback(async () => {
+    try {
+      const storedUserId = await AsyncStorage.getItem('currentUserId');
+      return storedUserId || 'user-cesar-1753750573601';
+    } catch (error) {
+      console.error('Error getting userId:', error);
+      return 'user-cesar-1753750573601';
+    }
+  }, []);
 
   // Estadísticas memoizadas
   const userStats = useMemo(() => {
@@ -47,14 +55,14 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation, route }) => {
   // Ranking memoizado
   const userRanking = useMemo(() => {
     const sortedUsers = [...allUsers].sort((a, b) => b.points - a.points);
-    const userPosition = sortedUsers.findIndex(user => user.id === userId) + 1;
+    const userPosition = sortedUsers.findIndex(user => user.id === (currentUser?.id || '')) + 1;
     return {
       position: userPosition,
       total: allUsers.length
     };
-  }, [allUsers, userId]);
+  }, [allUsers, currentUser?.id]);
 
-  // Logros memoizados
+  // Logros básicos - sin servicios adicionales
   const achievements = useMemo(() => [
     {
       id: 'first-goal',
@@ -81,40 +89,20 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation, route }) => {
       color: '#9F7AEA'
     },
     {
-      id: 'top-performer',
-      title: 'Alto Rendimiento',
-      description: 'Alcanzaste 90% de tasa de éxito',
-      icon: 'trending-up',
-      unlocked: userStats.successRate >= 90,
-      color: '#4299E1'
-    },
-    {
-      id: 'points-collector',
-      title: 'Coleccionista',
-      description: 'Acumulaste 500 puntos',
-      icon: 'star',
-      unlocked: (currentUser?.points || 0) >= 500,
-      color: '#ED8936'
-    },
-    {
-      id: 'team-player',
-      title: 'Jugador de Equipo',
-      description: 'Completaste 3 compromisos públicos',
+      id: 'social-butterfly',
+      title: 'Mariposa Social',
+      description: 'Completa 3 compromisos públicos',
       icon: 'users',
       unlocked: goals.filter(g => g.isPublic && g.isCompleted).length >= 3,
       color: '#E53E3E'
     }
-  ], [userStats, currentUser?.streak, currentUser?.points, goals]);
+  ], [userStats, currentUser?.streak, goals]);
 
-  const unlockedAchievements = useMemo(() => 
-    achievements.filter(a => a.unlocked), 
-    [achievements]
-  );
-
-  // Callbacks optimizados
   const loadData = useCallback(async () => {
     try {
       setIsLoading(true);
+      const userId = await getUserId();
+      
       const [user, userGoals, users] = await Promise.all([
         UserService.getUser(userId),
         GoalService.getUserGoals(userId),
@@ -129,58 +117,48 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation, route }) => {
     } finally {
       setIsLoading(false);
     }
-  }, [userId]);
+  }, [getUserId]);
 
-  const handleCreateGoal = useCallback(() => {
-    navigation.navigate('CreateGoal', { userId, userName: currentUser?.name });
-  }, [navigation, userId, currentUser?.name]);
+  const handleCreateGoal = useCallback(async () => {
+    const userId = await getUserId();
+    navigation.navigate('CreateGoal', { userId, userName: currentUser?.name || '' });
+  }, [navigation, currentUser?.name, getUserId]);
 
-  const handleViewTeam = useCallback(() => {
+  const handleViewTeam = useCallback(async () => {
+    const userId = await getUserId();
     navigation.navigate('Team', { currentUserId: userId });
-  }, [navigation, userId]);
+  }, [navigation, getUserId]);
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
 
-  // Componente memoizado para logros
-  const AchievementCard = React.memo(({ achievement }: { achievement: any }) => (
-    <View style={[
-      styles.achievementCard,
-      achievement.unlocked ? styles.achievementUnlocked : styles.achievementLocked
-    ]}>
-      <View style={[
-        styles.achievementIcon,
-        { backgroundColor: achievement.unlocked ? achievement.color : '#A0AEC0' }
-      ]}>
-        <Feather 
-          name={achievement.icon} 
-          size={20} 
-          color="#FFFFFF" 
-        />
-      </View>
-      <View style={styles.achievementInfo}>
-        <Text style={[
-          styles.achievementTitle,
-          { color: achievement.unlocked ? '#2D3748' : '#A0AEC0' }
-        ]}>
-          {achievement.title}
-        </Text>
-        <Text style={styles.achievementDescription}>
-          {achievement.description}
-        </Text>
-      </View>
-      {achievement.unlocked && (
-        <Feather name="check" size={16} color="#38A169" />
-      )}
-    </View>
-  ));
+    // Escuchar cambios en tiempo real
+    const unsubscribeUsers = UserService.listenToUsers((users) => {
+      setAllUsers(users);
+      getUserId().then(userId => {
+        const user = users.find(u => u.id === userId);
+        if (user) setCurrentUser(user);
+      });
+    });
+
+    const unsubscribeGoals = GoalService.listenToGoals((allGoals) => {
+      getUserId().then(userId => {
+        const userGoals = allGoals.filter(goal => goal.userId === userId);
+        setGoals(userGoals);
+      });
+    });
+
+    return () => {
+      unsubscribeUsers();
+      unsubscribeGoals();
+    };
+  }, [loadData, getUserId]);
 
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <Text>Cargando perfil...</Text>
+          <Text style={styles.loadingText}>Cargando perfil...</Text>
         </View>
       </SafeAreaView>
     );
@@ -235,17 +213,45 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation, route }) => {
           </View>
         </View>
 
-        {/* Achievements */}
+        {/* Achievements - solo los básicos */}
         <View style={styles.achievementsSection}>
           <Text style={styles.sectionTitle}>
-            🏆 Logros ({unlockedAchievements.length}/{achievements.length})
+            🏆 Logros ({achievements.filter(a => a.unlocked).length}/{achievements.length})
           </Text>
           <View style={styles.achievementsList}>
             {achievements.map(achievement => (
-              <AchievementCard 
-                key={achievement.id} 
-                achievement={achievement} 
-              />
+              <View
+                key={achievement.id}
+                style={[
+                  styles.achievementCard,
+                  achievement.unlocked ? styles.achievementUnlocked : styles.achievementLocked
+                ]}
+              >
+                <View style={[
+                  styles.achievementIcon,
+                  { backgroundColor: achievement.unlocked ? achievement.color : '#A0AEC0' }
+                ]}>
+                  <Feather 
+                    name={achievement.icon} 
+                    size={20} 
+                    color="#FFFFFF" 
+                  />
+                </View>
+                <View style={styles.achievementInfo}>
+                  <Text style={[
+                    styles.achievementTitle,
+                    { color: achievement.unlocked ? '#2D3748' : '#A0AEC0' }
+                  ]}>
+                    {achievement.title}
+                  </Text>
+                  <Text style={styles.achievementDescription}>
+                    {achievement.description}
+                  </Text>
+                </View>
+                {achievement.unlocked && (
+                  <Feather name="check" size={16} color="#38A169" />
+                )}
+              </View>
             ))}
           </View>
         </View>
@@ -263,13 +269,6 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation, route }) => {
           </TouchableOpacity>
         </View>
       </ScrollView>
-
-      <BottomNavigation 
-        navigation={navigation} 
-        currentScreen="Profile"
-        userId={userId}
-        userName={currentUser?.name}
-      />
     </SafeAreaView>
   );
 };
@@ -470,6 +469,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#718096',
     textAlign: 'center',
+  },
+  rarityBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+  },
+  rarityText: {
+    fontSize: 12,
   },
   actionsSection: {
     flexDirection: 'row',

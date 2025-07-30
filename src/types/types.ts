@@ -1,14 +1,17 @@
 // Tipos de navegación
 export type RootStackParamList = {
-  Home: undefined; // o Home: undefined si es tu pantalla inicial
+  Home: undefined;
   UserInput: { userType: string };
-  Dashboard: { userId: string; userName: string };
+  Dashboard: { userId?: string; userName?: string }; // Pasar parámetros al contenedor de tabs
   CreateGoal: { userId: string; userName: string };
-  Profile: { userId?: string; userName?: string };
   Team: { currentUserId: string };
-  PublicCommitments: { userId?: string; userName?: string };
-  AppBlocker: { userId?: string; userName?: string };
-  DailyChallenge: { userId?: string; userName?: string };
+};
+
+// Tipos para las tabs dentro de Dashboard
+export type TabParamList = {
+  DashboardTab: { userId?: string; userName?: string };
+  PublicCommitmentsTab: { userId?: string; userName?: string };
+  ProfileTab: { userId?: string; userName?: string };
 };
 
 // Tipos de usuario

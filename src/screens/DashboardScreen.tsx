@@ -1,160 +1,449 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
+  ScrollView,
   TouchableOpacity,
   StyleSheet,
   SafeAreaView,
-  ScrollView,
   Alert,
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
-import BottomNavigation from '../components/BottomNavigation';
-import { Goal, GoalService } from '../services/GoalService';
-import { StoredUser, UserService } from '../services/UserService';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import type { NavigationProp } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { UserService, StoredUser } from '../services/UserService';
+import { GoalService, Goal } from '../services/GoalService';
+import { RootStackParamList } from '../types/types';
 
-interface DashboardScreenProps {
-  navigation: any;
-  route: any;
-}
-
-const DashboardScreen: React.FC<DashboardScreenProps> = ({ navigation, route }) => {
-  const [goals, setGoals] = useState<Goal[]>([]);
+const DashboardScreen: React.FC = () => {
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const [currentUser, setCurrentUser] = useState<StoredUser | null>(null);
   const [allUsers, setAllUsers] = useState<StoredUser[]>([]);
+  const [userGoals, setUserGoals] = useState<Goal[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const { userId, userName } = route.params;
-
-  // Memoizar datos calculados
-  const memoizedGoals = useMemo(() => goals, [goals]);
-  
-  const completedGoals = useMemo(() => 
-    goals.filter(goal => goal.isCompleted), 
-    [goals]
-  );
-
-  const activeGoals = useMemo(() => 
-    goals.filter(goal => !goal.isCompleted && !goal.isIncomplete), 
-    [goals]
-  );
-
-  // Callbacks optimizados para navegación
-  const handleCreateGoal = useCallback(() => {
-    navigation.navigate('CreateGoal', { userId, userName });
-  }, [navigation, userId, userName]);
-
-  const handleTeamNavigation = useCallback(() => {
-    navigation.navigate('Team', { currentUserId: userId });
-  }, [navigation, userId]);
-
-  const handlePublicCommitments = useCallback(() => {
-    navigation.replace('PublicCommitments', { userId, userName });
-  }, [navigation, userId, userName]);
-
-  // Callback optimizado para completar metas
-  const handleCompleteGoal = useCallback(async (goalId: string) => {
+  // Obtener userId desde AsyncStorage
+  const getUserId = async () => {
     try {
-      await GoalService.completeGoal(goalId);
-      // Actualizar solo el estado local sin recargar todo
-      setGoals(prev => prev.map(goal => 
-        goal.id === goalId 
-          ? { ...goal, isCompleted: true, completedAt: new Date().toISOString() }
-          : goal
-      ));
-      Alert.alert('¡Excelente!', '¡Meta completada!');
+      const storedUserId = await AsyncStorage.getItem('currentUserId');
+      return storedUserId || 'user-cesar-1753750573601';
     } catch (error) {
-      console.error('Error completing goal:', error);
-      Alert.alert('Error', 'No se pudo completar la meta');
+      console.error('Error getting userId:', error);
+      return 'user-cesar-1753750573601';
     }
-  }, []);
+  };
 
-  const handleTogglePublic = useCallback(async (goalId: string) => {
-    try {
-      const goal = goals.find(g => g.id === goalId);
-      if (goal) {
-        const updatedGoal = { ...goal, isPublic: !goal.isPublic };
-        await GoalService.updateGoal(goalId, updatedGoal);
-        setGoals(prev => prev.map(g => g.id === goalId ? updatedGoal : g));
-      }
-    } catch (error) {
-      console.error('Error toggling public:', error);
-    }
-  }, [goals]);
-
-  // Cargar datos solo una vez
-  const loadData = useCallback(async () => {
+  const loadUserData = async () => {
     try {
       setIsLoading(true);
-      const [user, userGoals, users] = await Promise.all([
-        UserService.getUser(userId),
-        GoalService.getUserGoals(userId),
-        UserService.getAllUsers()
-      ]);
+      const userId = await getUserId();
       
+      const [user, users, goals] = await Promise.all([
+        UserService.getUser(userId),
+        UserService.getAllUsers(),
+        GoalService.getUserGoals(userId)
+      ]);
+
       setCurrentUser(user);
-      setGoals(userGoals);
-      setAllUsers(users);
+      const sortedUsers = users.sort((a, b) => b.points - a.points);
+      setAllUsers(sortedUsers);
+      setUserGoals(goals);
+      
+      console.log('📋 Dashboard cargado para:', user.name);
     } catch (error) {
-      console.error('Error loading data:', error);
+      console.error('Error loading user data:', error);
     } finally {
       setIsLoading(false);
     }
-  }, [userId]);
+  };
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  // Usar useFocusEffect para recargar cuando la tab esté activa
+  useFocusEffect(
+    React.useCallback(() => {
+      loadUserData();
 
-  // Componente memoizado para las cards de metas
-  const GoalCard = React.memo(({ goal, onComplete, onTogglePublic }: any) => (
-    <View style={styles.goalCard}>
-      <View style={styles.goalHeader}>
-        <Text style={styles.goalTitle}>{goal.title}</Text>
-        <View style={styles.goalMeta}>
-          <Text style={styles.goalPoints}>+{goal.points} pts</Text>
+      // Escuchar cambios en tiempo real
+      const unsubscribeUsers = UserService.listenToUsers((users) => {
+        const sortedUsers = users.sort((a, b) => b.points - a.points);
+        setAllUsers(sortedUsers);
+        
+        getUserId().then(userId => {
+          const updatedCurrentUser = users.find(u => u.id === userId);
+          if (updatedCurrentUser) {
+            setCurrentUser(updatedCurrentUser);
+          }
+        });
+      });
+
+      const unsubscribeGoals = GoalService.listenToGoals((allGoals) => {
+        getUserId().then(userId => {
+          const userGoalsFiltered = allGoals.filter(goal => goal.userId === userId);
+          setUserGoals(userGoalsFiltered);
+        });
+      });
+
+      return () => {
+        unsubscribeUsers();
+        unsubscribeGoals();
+      };
+    }, [])
+  );
+
+  // Obtener fechas relevantes
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const thisWeekEnd = new Date(today);
+  thisWeekEnd.setDate(thisWeekEnd.getDate() + 7);
+
+  // Categorizar metas por tiempo
+  const categorizedGoals = userGoals.reduce((acc, goal) => {
+    const goalDate = new Date(goal.dueDate);
+    const goalDateOnly = new Date(goalDate.getFullYear(), goalDate.getMonth(), goalDate.getDate());
+    
+    if (goalDateOnly.getTime() === today.getTime()) {
+      acc.today.push(goal);
+    } else if (goalDateOnly.getTime() === tomorrow.getTime()) {
+      acc.tomorrow.push(goal);
+    } else if (goalDateOnly > tomorrow && goalDateOnly <= thisWeekEnd) {
+      acc.thisWeek.push(goal);
+    } else if (goalDateOnly > thisWeekEnd) {
+      acc.later.push(goal);
+    } else {
+      acc.overdue.push(goal);
+    }
+    
+    return acc;
+  }, {
+    today: [] as Goal[],
+    tomorrow: [] as Goal[],
+    thisWeek: [] as Goal[],
+    later: [] as Goal[],
+    overdue: [] as Goal[]
+  });
+
+  // Crear las categorías para mostrar
+  const goalCategories = [
+    {
+      id: 'today',
+      title: 'Tus metas de hoy',
+      subtitle: categorizedGoals.today.length === 0 ? 'Sin metas para hoy' : 
+                `${categorizedGoals.today.length} meta${categorizedGoals.today.length !== 1 ? 's' : ''}`,
+      goals: categorizedGoals.today,
+      color: '#4299E1',
+      emoji: '📅'
+    },
+    {
+      id: 'tomorrow',
+      title: 'Metas de mañana',
+      subtitle: categorizedGoals.tomorrow.length === 0 ? 'Sin metas para mañana' : 
+                `${categorizedGoals.tomorrow.length} meta${categorizedGoals.tomorrow.length !== 1 ? 's' : ''}`,
+      goals: categorizedGoals.tomorrow,
+      color: '#38A169',
+      emoji: '🌅'
+    },
+    {
+      id: 'week',
+      title: 'Esta semana',
+      subtitle: categorizedGoals.thisWeek.length === 0 ? 'Sin metas esta semana' : 
+                `${categorizedGoals.thisWeek.length} meta${categorizedGoals.thisWeek.length !== 1 ? 's' : ''}`,
+      goals: categorizedGoals.thisWeek,
+      color: '#F6AD55',
+      emoji: '📊'
+    },
+    {
+      id: 'later',
+      title: 'Más adelante',
+      subtitle: categorizedGoals.later.length === 0 ? 'Sin metas futuras' : 
+                `${categorizedGoals.later.length} meta${categorizedGoals.later.length !== 1 ? 's' : ''}`,
+      goals: categorizedGoals.later,
+      color: '#9F7AEA',
+      emoji: '🚀'
+    }
+  ];
+
+  // Si hay metas vencidas, agregarlas al principio
+  if (categorizedGoals.overdue.length > 0) {
+    goalCategories.unshift({
+      id: 'overdue',
+      title: '¡Metas vencidas!',
+      subtitle: `${categorizedGoals.overdue.length} meta${categorizedGoals.overdue.length !== 1 ? 's' : ''} sin completar`,
+      goals: categorizedGoals.overdue,
+      color: '#E53E3E',
+      emoji: '⚠️'
+    });
+  }
+
+  const completedGoals = userGoals.filter(goal => goal.isCompleted);
+  const totalPoints = completedGoals.reduce((sum, goal) => sum + goal.points, 0);
+  const failedGoals = userGoals.filter(goal => !goal.isCompleted);
+  const lostPoints = failedGoals.reduce((sum, goal) => sum + goal.points, 0);
+
+  const notifications = [
+    {
+      id: '1',
+      type: 'welcome',
+      title: `¡Bienvenido ${currentUser?.name}!`,
+      message: userGoals.length === 0 
+        ? 'Comienza creando tu primera meta diaria' 
+        : `Tienes ${userGoals.length} meta${userGoals.length !== 1 ? 's' : ''} para hoy`,
+      time: 'Ahora',
+    }
+  ];
+
+  const formatDate = () => {
+    return new Date().toLocaleDateString('es-ES', { 
+      weekday: 'long', 
+      day: 'numeric',
+      month: 'long' 
+    });
+  };
+
+  const handleToggleGoal = async (goalId: string, completed: boolean) => {
+    if (completed) {
+      // Encontrar la meta antes de completarla
+      const goal = userGoals.find(g => g.id === goalId);
+      if (!goal) {
+        Alert.alert('Error', 'Meta no encontrada.');
+        return;
+      }
+
+      Alert.alert(
+        '¿Qué pasó con tu meta? 🤔',
+        `"${goal.title}"\n\n¿La completaste o no pudiste terminarla?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { 
+            text: '❌ No completé', 
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                console.log(`📉 Marcando meta como no completada: ${goal.title}`);
+                
+                await GoalService.markGoalAsIncomplete(goalId);
+                
+                // Mostrar feedback para meta no completida
+                Alert.alert(
+                  'Meta no completada 😔', 
+                  `No pasa nada, "${goal.title}" se marcó como no completada.\n\n` +
+                  `Perdiste -${goal.points} puntos potenciales, pero ¡puedes crear una nueva meta! 💪`,
+                  [{ text: 'Entendido', style: 'default' }]
+                );
+                
+              } catch (error) {
+                console.error('❌ Error marking goal as incomplete:', error);
+                Alert.alert('Error', 'No se pudo procesar la meta. Inténtalo de nuevo.');
+              }
+            }
+          },
+          { 
+            text: '✅ Sí completé', 
+            onPress: async () => {
+              try {
+                console.log(`🎯 Completando meta: ${goal.title}`);
+                
+                await GoalService.completeGoal(goalId);
+                
+                // Mostrar feedback positivo
+                Alert.alert(
+                  '¡Excelente! 🏆', 
+                  `¡Completaste "${goal.title}"!\n\nHas ganado +${goal.points} puntos 🎯\n\n¡Sigue así!`,
+                  [{ text: 'Genial!', style: 'default' }]
+                );
+                
+              } catch (error) {
+                console.error('❌ Error completing goal:', error);
+                
+                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+                
+                Alert.alert(
+                  'Error al completar meta', 
+                  `No se pudo completar la meta.\n\nDetalle: ${errorMessage}\n\n¿Tienes conexión a internet?`,
+                  [
+                    { text: 'Reintentar', onPress: () => handleToggleGoal(goalId, completed) },
+                    { text: 'Cancelar', style: 'cancel' }
+                  ]
+                );
+              }
+            }
+          },
+        ]
+      );
+    }
+  };
+
+  const GoalCard = ({ goal, compact = false, categoryColor }: { goal: Goal, compact?: boolean, categoryColor?: string }) => {
+    const getStatusIcon = () => {
+      if (goal.isCompleted) {
+        return <Feather name="check" size={12} color="#FFFFFF" />;
+      } else if (goal.isIncomplete) {
+        return <Feather name="x" size={12} color="#FFFFFF" />;
+      } else {
+        return <Feather name="circle" size={12} color="#FFFFFF" />;
+      }
+    };
+
+    const getStatusColor = () => {
+      if (goal.isCompleted) return '#38A169';
+      if (goal.isIncomplete) return '#E53E3E';
+      return categoryColor || '#718096';
+    };
+
+    const getBackgroundColor = () => {
+      if (goal.isCompleted) return '#F0FFF4';
+      if (goal.isIncomplete) return '#FED7D7';
+      return '#FFFFFF';
+    };
+
+    const getBorderColor = () => {
+      if (goal.isCompleted) return '#38A169';
+      if (goal.isIncomplete) return '#E53E3E';
+      return '#E2E8F0';
+    };
+
+    const formatGoalDate = (dateString: string) => {
+      const date = new Date(dateString);
+      return date.toLocaleTimeString('es-ES', {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    };
+
+    const getDifficultyEmoji = (difficulty: string) => {
+      switch (difficulty) {
+        case 'easy': return '😊';
+        case 'medium': return '😤';
+        case 'hard': return '🔥';
+        default: return '⭐';
+      }
+    };
+
+    return (
+      <TouchableOpacity
+        style={[
+          compact ? styles.goalCardCompact : styles.goalCard,
+          { 
+            backgroundColor: getBackgroundColor(),
+            borderWidth: 1,
+            borderColor: getBorderColor()
+          }
+        ]}
+        onPress={() => handleToggleGoal(goal.id, !goal.isCompleted && !goal.isIncomplete)}
+        activeOpacity={0.7}
+        disabled={goal.isCompleted || goal.isIncomplete} // Deshabilitar si ya está procesada
+      >
+        <View style={[
+          compact ? styles.goalStatusCompact : styles.goalStatus, 
+          { backgroundColor: getStatusColor() }
+        ]}>
+          {getStatusIcon()}
         </View>
-      </View>
-      <Text style={styles.goalDescription}>{goal.description}</Text>
-      
-      <View style={styles.goalFooter}>
-        <View style={styles.goalActions}>
-          <TouchableOpacity
-            style={styles.completeButton}
-            onPress={() => onComplete(goal.id)}
-            activeOpacity={0.7}
-          >
-            <Feather name="check" size={16} color="#FFFFFF" />
-            <Text style={styles.completeButtonText}>Completar</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={[styles.publicButton, goal.isPublic && styles.publicButtonActive]}
-            onPress={() => onTogglePublic(goal.id)}
-            activeOpacity={0.7}
-          >
-            <Feather 
-              name={goal.isPublic ? "eye" : "eye-off"} 
-              size={14} 
-              color={goal.isPublic ? "#FFFFFF" : "#4299E1"} 
-            />
+        
+        <View style={styles.goalContent}>
+          <View style={styles.goalHeader}>
             <Text style={[
-              styles.publicButtonText,
-              { color: goal.isPublic ? "#FFFFFF" : "#4299E1" }
+              compact ? styles.goalTitleCompact : styles.goalTitle, 
+              (goal.isCompleted || goal.isIncomplete) && styles.goalTitleCompleted
             ]}>
-              {goal.isPublic ? 'Público' : 'Privado'}
+              {!compact && getDifficultyEmoji(goal.difficulty)} {goal.title}
+              {goal.isIncomplete && ' ❌'}
             </Text>
-          </TouchableOpacity>
+            <Text style={compact ? styles.goalTimeCompact : styles.goalTime}>
+              {formatGoalDate(goal.dueDate)}
+            </Text>
+          </View>
+          
+          {!compact && goal.description ? (
+            <Text style={styles.goalDescription} numberOfLines={1}>
+              {goal.description}
+            </Text>
+          ) : null}
+          
+          <View style={styles.goalFooter}>
+            {!compact && (
+              <Text style={styles.goalFrequency}>
+                {goal.frequency === 'once' ? 'Una vez' : 
+                 goal.frequency === 'daily' ? 'Diaria' : 'Semanal'}
+              </Text>
+            )}
+            <Text style={[
+              compact ? styles.goalPointsCompact : styles.goalPoints,
+              { color: goal.isCompleted ? '#38A169' : 
+                      goal.isIncomplete ? '#E53E3E' : '#2D3748' }
+            ]}>
+              {goal.isCompleted ? '+' : goal.isIncomplete ? '-' : '+'}{goal.points}
+            </Text>
+          </View>
         </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const RankingCard = ({ users, currentUserId }: { users: StoredUser[], currentUserId: string }) => (
+    <View style={styles.card}>
+      <View style={styles.cardHeader}>
+        <Text style={styles.cardTitle}>Ranking del Grupo</Text>
+        <TouchableOpacity
+          onPress={() => navigation.navigate('Team', { currentUserId })}
+          style={styles.viewAllButton}
+        >
+          <Text style={styles.viewAllText}>Ver todos</Text>
+          <Feather name="arrow-right" size={16} color="#4299E1" />
+        </TouchableOpacity>
+      </View>
+      
+      <View style={styles.rankingList}>
+        {users.length === 0 ? (
+          <Text style={styles.emptyMessage}>
+            Aún no hay otros usuarios en el equipo
+          </Text>
+        ) : (
+          users.slice(0, 5).map((user, index) => {
+            const isCurrentUser = user.id === currentUserId;
+            const rank = index + 1;
+            
+            return (
+              <View 
+                key={user.id}
+                style={[
+                  styles.rankingItem,
+                  rank === 1 ? styles.firstPlace : 
+                  isCurrentUser ? styles.currentUser : styles.regularUser
+                ]}
+              >
+                <View style={[
+                  styles.rankBadge,
+                  { backgroundColor: rank === 1 ? '#F6AD55' : 
+                    isCurrentUser ? '#4299E1' : '#A0AEC0' }
+                ]}>
+                  <Text style={styles.rankNumber}>{rank}</Text>
+                </View>
+                <View style={styles.rankingInfo}>
+                  <Text style={styles.userName}>
+                    {user.name}{isCurrentUser ? ' (Tú)' : ''}
+                  </Text>
+                </View>
+                <Text style={[
+                  styles.userPoints,
+                  { color: rank === 1 ? '#38A169' : '#2D3748' }
+                ]}>
+                  {user.points} pts
+                </Text>
+              </View>
+            );
+          })
+        )}
       </View>
     </View>
-  ));
+  );
 
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <Text>Cargando...</Text>
+          <Text style={styles.loadingText}>Cargando...</Text>
         </View>
       </SafeAreaView>
     );
@@ -165,21 +454,17 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ navigation, route }) 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Text style={styles.greeting}>¡Hola, {userName}! 👋</Text>
-            <Text style={styles.subgreeting}>¿Listo para ser productivo?</Text>
+          <View>
+            <Text style={styles.greeting}>¡Hola, {currentUser?.name || 'Usuario'}! 👋</Text>
+            <Text style={styles.date}>{formatDate()}</Text>
           </View>
           <View style={styles.headerRight}>
             <TouchableOpacity
-              style={[styles.teamButton, { backgroundColor: '#FFF5F5', marginRight: 8 }]}
-              onPress={handlePublicCommitments}
-            >
-              <Feather name="target" size={16} color="#E53E3E" />
-            </TouchableOpacity>
-            
-            <TouchableOpacity
               style={styles.teamButton}
-              onPress={handleTeamNavigation}
+              onPress={async () => {
+                const userId = await getUserId();
+                navigation.navigate('Team', { currentUserId: userId });
+              }}
             >
               <Feather name="users" size={20} color="#4299E1" />
             </TouchableOpacity>
@@ -190,61 +475,118 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ navigation, route }) 
           </View>
         </View>
 
-        {/* Stats Cards */}
-        <View style={styles.statsContainer}>
-          <View style={[styles.statCard, { backgroundColor: '#E6FFFA' }]}>
-            <Feather name="target" size={24} color="#319795" />
-            <Text style={styles.statNumber}>{activeGoals.length}</Text>
-            <Text style={styles.statLabel}>Metas Activas</Text>
+        {/* Goals Categories Carousel */}
+        <View style={styles.goalsCarouselContainer}>
+          <View style={styles.carouselHeader}>
+            <Text style={styles.carouselTitle}>Tus Metas</Text>
+            <Text style={styles.carouselSubtitle}>Desliza para ver más →</Text>
           </View>
-          <View style={[styles.statCard, { backgroundColor: '#F0FFF4' }]}>
-            <Feather name="check-circle" size={24} color="#38A169" />
-            <Text style={styles.statNumber}>{completedGoals.length}</Text>
-            <Text style={styles.statLabel}>Completadas</Text>
-          </View>
-          <View style={[styles.statCard, { backgroundColor: '#FFFBEB' }]}>
-            <Feather name="zap" size={24} color="#D69E2E" />
-            <Text style={styles.statNumber}>{currentUser?.streak || 0}</Text>
-            <Text style={styles.statLabel}>Racha</Text>
-          </View>
+          
+          <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={false}
+            style={styles.goalsCarousel}
+            contentContainerStyle={styles.carouselContent}
+            snapToInterval={320} // Ancho de cada tarjeta + margen
+            decelerationRate="fast"
+          >
+            {goalCategories.map((category, index) => (
+              <View key={category.id} style={[
+                styles.goalCategoryCard,
+                index === 0 && styles.firstCard,
+                index === goalCategories.length - 1 && styles.lastCard
+              ]}>
+                {/* Header de la categoría */}
+                <View style={[styles.categoryHeader, { borderTopColor: category.color }]}>
+                  <View style={styles.categoryTitleRow}>
+                    <Text style={styles.categoryEmoji}>{category.emoji}</Text>
+                    <Text style={styles.categoryTitle}>{category.title}</Text>
+                  </View>
+                  <Text style={[styles.categorySubtitle, { color: category.color }]}>
+                    {category.subtitle}
+                  </Text>
+                </View>
+
+                {/* Lista de metas */}
+                <View style={styles.categoryGoalsList}>
+                  {category.goals.length > 0 ? (
+                    category.goals.slice(0, 3).map((goal) => (
+                      <GoalCard 
+                        key={goal.id} 
+                        goal={goal} 
+                        compact={true}
+                        categoryColor={category.color}
+                      />
+                    ))
+                  ) : (
+                    <View style={styles.emptyCategory}>
+                      <Text style={styles.emptyCategoryText}>
+                        {category.id === 'today' ? 
+                          '¡Perfecto! Tienes el día libre 😊' :
+                          category.id === 'tomorrow' ?
+                          'Planifica metas para mañana' :
+                          'No hay metas programadas'
+                        }
+                      </Text>
+                    </View>
+                  )}
+                  
+                  {/* Mostrar "ver más" si hay más de 3 metas */}
+                  {category.goals.length > 3 && (
+                    <TouchableOpacity style={styles.viewMoreButton}>
+                      <Text style={[styles.viewMoreText, { color: category.color }]}>
+                        Ver todas ({category.goals.length})
+                      </Text>
+                      <Feather name="arrow-right" size={14} color={category.color} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {/* Footer con estadísticas */}
+                <View style={styles.categoryFooter}>
+                  <View style={styles.categoryStats}>
+                    <Text style={styles.statLabel}>Completadas:</Text>
+                    <Text style={[styles.statValue, { color: '#38A169' }]}>
+                      {category.goals.filter(g => g.isCompleted).length}
+                    </Text>
+                  </View>
+                  <View style={styles.categoryStats}>
+                    <Text style={styles.statLabel}>Puntos:</Text>
+                    <Text style={[styles.statValue, { color: category.color }]}>
+                      +{category.goals.reduce((sum, g) => sum + (g.isCompleted ? g.points : 0), 0)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
         </View>
 
-        {/* Goals Section */}
-        <View style={styles.goalsSection}>
-          <View style={styles.goalsSectionHeader}>
-            <Text style={styles.sectionTitle}>Tus Metas 🎯</Text>
-            <TouchableOpacity
-              onPress={handleCreateGoal}
-              style={styles.addButton}
-            >
-              <Feather name="plus" size={16} color="#4299E1" />
-            </TouchableOpacity>
-          </View>
+        {/* Ranking Card */}
+        <RankingCard users={allUsers} currentUserId={currentUser?.id || ''} />
 
-          {/* Goals List */}
-          <View style={styles.goalsCarouselContainer}>
-            {memoizedGoals.length > 0 ? (
-              memoizedGoals.map((goal) => (
-                <GoalCard
-                  key={goal.id}
-                  goal={goal}
-                  onComplete={handleCompleteGoal}
-                  onTogglePublic={handleTogglePublic}
-                />
-              ))
-            ) : (
-              <View style={styles.emptyStateContainer}>
-                <Text style={styles.emptyStateEmoji}>🎯</Text>
-                <Text style={styles.emptyStateTitle}>¡Crea tu primera meta!</Text>
-                <TouchableOpacity
-                  style={styles.createFirstGoalButton}
-                  onPress={handleCreateGoal}
-                >
-                  <Feather name="plus" size={16} color="#FFFFFF" />
-                  <Text style={styles.createFirstGoalText}>Crear Meta</Text>
-                </TouchableOpacity>
+        {/* Notifications Card */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Notificaciones</Text>
+          <View style={styles.notificationsList}>
+            {notifications.slice(0, 3).map(notification => (
+              <View key={notification.id} style={styles.notificationItem}>
+                <View style={styles.notificationIcon}>
+                  <Feather name="star" size={16} color="#38A169" />
+                </View>
+                <View style={styles.notificationContent}>
+                  <Text style={styles.notificationTitle}>
+                    {notification.title}
+                  </Text>
+                  <Text style={styles.notificationMessage}>
+                    {notification.message}
+                  </Text>
+                  <Text style={styles.notificationTime}>
+                    {notification.time}
+                  </Text>
+                </View>
               </View>
-            )}
+            ))}
           </View>
         </View>
       </ScrollView>
@@ -252,19 +594,14 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({ navigation, route }) 
       {/* Floating Action Button */}
       <TouchableOpacity
         style={styles.fab}
-        onPress={handleCreateGoal}
+        onPress={async () => {
+          const userId = await getUserId();
+          navigation.navigate('CreateGoal', { userId, userName: currentUser?.name || '' });
+        }}
         activeOpacity={0.8}
       >
         <Feather name="plus" size={24} color="#FFFFFF" />
       </TouchableOpacity>
-
-      {/* Bottom Navigation */}
-      <BottomNavigation 
-        navigation={navigation} 
-        currentScreen="Dashboard"
-        userId={userId}
-        userName={userName}
-      />
     </SafeAreaView>
   );
 };
@@ -294,15 +631,12 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginVertical: 24,
   },
-  headerLeft: {
-    flex: 1,
-  },
   greeting: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#2D3748',
   },
-  subgreeting: {
+  date: {
     fontSize: 14,
     color: '#718096',
     marginTop: 4,
@@ -372,91 +706,95 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   goalCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4299E1',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: 16,
+    borderRadius: 12,
+  },
+  goalCardCompact: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    padding: 12,
+    borderRadius: 10,
+  },
+  goalStatus: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+    marginTop: 2,
+  },
+  goalStatusCompact: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+    marginTop: 2,
+  },
+  goalTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#2D3748',
+    lineHeight: 20,
+  },
+  goalTitleCompact: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#2D3748',
+    lineHeight: 18,
+  },
+  goalTitleCompleted: {
+    textDecorationLine: 'line-through',
+    color: '#718096',
+  },
+  goalPoints: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  goalPointsCompact: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  goalContent: {
+    flex: 1,
   },
   goalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 8,
+    marginBottom: 4,
   },
-  goalTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#2D3748',
-    flex: 1,
-    marginRight: 12,
+  goalTime: {
+    fontSize: 12,
+    color: '#718096',
+    fontWeight: '500',
   },
-  goalMeta: {
-    alignItems: 'flex-end',
-  },
-  goalPoints: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#38A169',
+  goalTimeCompact: {
+    fontSize: 11,
+    color: '#718096',
+    fontWeight: '500',
   },
   goalDescription: {
     fontSize: 14,
     color: '#718096',
-    lineHeight: 20,
-    marginBottom: 16,
+    marginBottom: 8,
   },
   goalFooter: {
-    borderTopWidth: 1,
-    borderTopColor: '#F7FAFC',
-    paddingTop: 16,
-  },
-  goalActions: {
     flexDirection: 'row',
-    gap: 12,
-  },
-  completeButton: {
-    flex: 1,
-    backgroundColor: '#38A169',
-    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: 8,
-    gap: 6,
+    marginTop: 8,
   },
-  completeButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  publicButton: {
-    backgroundColor: '#EBF8FF',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#4299E1',
-    gap: 6,
-  },
-  publicButtonActive: {
-    backgroundColor: '#4299E1',
-    borderColor: '#4299E1',
-  },
-  publicButtonText: {
-    fontSize: 14,
-    fontWeight: '500',
+  goalFrequency: {
+    fontSize: 12,
+    color: '#A0AEC0',
+    fontWeight: '400',
   },
   
   // Estilos del carrusel
@@ -566,7 +904,7 @@ const styles = StyleSheet.create({
   categoryStats: {
     alignItems: 'center',
   },
-  statLabelSmall: {
+  statLabel: {
     fontSize: 11,
     color: '#A0AEC0',
     marginBottom: 2,
@@ -682,86 +1020,6 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 8,
   },
-  statsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 24,
-  },
-  statCard: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 12,
-    marginRight: 16,
-  },
-  statNumber: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#2D3748',
-    marginLeft: 8,
-  },
-  statLabel: {
-    fontSize: 14,
-    color: '#718096',
-  },
-  goalsSection: {
-    marginBottom: 24,
-  },
-  goalsSectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#2D3748',
-  },
-  addButton: {
-    backgroundColor: '#4299E1',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  emptyStateContainer: {
-    alignItems: 'center',
-    padding: 40,
-  },
-  emptyStateEmoji: {
-    fontSize: 48,
-    marginBottom: 16,
-  },
-  emptyStateTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#2D3748',
-    marginBottom: 8,
-  },
-  emptyStateDescription: {
-    fontSize: 16,
-    color: '#718096',
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  createFirstGoalButton: {
-    backgroundColor: '#4299E1',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 12,
-    gap: 8,
-  },
-  createFirstGoalText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
 });
 
-export default React.memo(DashboardScreen);
+export default DashboardScreen;

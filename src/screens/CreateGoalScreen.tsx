@@ -16,7 +16,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../types/types';
-import { GoalService } from '../services/GoalService';
+import { GoalService, Goal } from '../services/GoalService';
 
 type CreateGoalScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'CreateGoal'>;
 type CreateGoalScreenRouteProp = RouteProp<RootStackParamList, 'CreateGoal'>;
@@ -26,7 +26,7 @@ interface CreateGoalScreenProps {
   route: CreateGoalScreenRouteProp;
 }
 
-const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ navigation, route }) => {
+const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ route, navigation }) => {
   const { userId, userName } = route.params;
 
   const [formData, setFormData] = useState({
@@ -42,15 +42,17 @@ const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ navigation, route }
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = async () => {
-    if (!formData.title.trim()) {
-      Alert.alert('Error', 'El nombre de la meta es requerido.');
+  const handleCreateGoal = async () => {
+    const { title, description, dueDate, frequency, difficulty, isPublic } = formData;
+
+    if (!title.trim()) {
+      Alert.alert('Error', 'Por favor ingresa un título para la meta');
       return;
     }
 
     // Validar que la fecha no sea en el pasado
     const now = new Date();
-    if (formData.dueDate < now) {
+    if (dueDate < now) {
       Alert.alert('Error', 'La fecha límite no puede ser en el pasado.');
       return;
     }
@@ -58,23 +60,22 @@ const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ navigation, route }
     setIsLoading(true);
 
     try {
-      const points = formData.difficulty === 'easy' ? 2 : 
-                    formData.difficulty === 'medium' ? 5 : 10;
+      const points = difficulty === 'easy' ? 2 : 
+                    difficulty === 'medium' ? 5 : 10;
 
-      const goalData = {
+      const goalData: Goal = {
         id: `goal-${userId}-${Date.now()}`,
         userId: userId,
-        userName: userName,
-        title: formData.title.trim(),
-        description: formData.description.trim(),
-        difficulty: formData.difficulty,
+        title: title.trim(),
+        description: description.trim(),
+        difficulty,
         points,
-        dueDate: formData.dueDate.toISOString(),
-        frequency: formData.frequency,
-        isPublic: formData.isPublic,
+        dueDate: dueDate.toISOString(),
+        frequency,
+        isPublic,
         isCompleted: false,
+        isIncomplete: false,
         createdAt: new Date().toISOString(),
-        lastUpdated: new Date().toISOString(),
       };
 
       // Guardar la meta en Firebase
@@ -84,9 +85,9 @@ const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ navigation, route }
 
       Alert.alert(
         '¡Meta creada! 🎯', 
-        `Tu meta "${formData.title}" ha sido creada exitosamente.\n\n` +
+        `Tu meta "${title}" ha sido creada exitosamente.\n\n` +
         `Puntos por completar: +${points}\n` +
-        `${formData.isPublic ? 'Visible para tus amigos' : 'Solo visible para ti'}`,
+        `${isPublic ? 'Visible para tus amigos' : 'Solo visible para ti'}`,
         [
           { 
             text: 'OK', 
@@ -105,24 +106,14 @@ const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ navigation, route }
     }
   };
 
-  const getDifficultyStyle = (difficulty: 'easy' | 'medium' | 'hard') => {
-    const isSelected = formData.difficulty === difficulty;
-    if (isSelected) {
-      return difficulty === 'easy' ? styles.easySelected :
-             difficulty === 'medium' ? styles.mediumSelected :
-             styles.hardSelected;
-    }
-    return styles.difficultyUnselected;
-  };
-
-  const onDateChange = (event: any, selectedDate?: Date) => {
+  const onDateChange = (_: any, selectedDate?: Date) => {
     setShowDatePicker(false);
     if (selectedDate) {
       setFormData({ ...formData, dueDate: selectedDate });
     }
   };
 
-  const onTimeChange = (event: any, selectedTime?: Date) => {
+  const onTimeChange = (_: any, selectedTime?: Date) => {
     setShowTimePicker(false);
     if (selectedTime) {
       const newDate = new Date(formData.dueDate);
@@ -145,6 +136,16 @@ const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ navigation, route }
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const getDifficultyStyle = (difficulty: 'easy' | 'medium' | 'hard') => {
+    const isSelected = formData.difficulty === difficulty;
+    if (isSelected) {
+      return difficulty === 'easy' ? styles.easySelected :
+             difficulty === 'medium' ? styles.mediumSelected :
+             styles.hardSelected;
+    }
+    return styles.difficultyUnselected;
   };
 
   return (
@@ -381,7 +382,7 @@ const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ navigation, route }
       <View style={styles.buttonContainer}>
         <TouchableOpacity
           style={[styles.createButton, isLoading && styles.createButtonDisabled]}
-          onPress={handleSubmit}
+          onPress={handleCreateGoal}
           activeOpacity={0.8}
           disabled={isLoading || !formData.title.trim()}
         >

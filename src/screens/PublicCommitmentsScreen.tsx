@@ -11,48 +11,46 @@ import {
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
 import * as ImagePicker from 'expo-image-picker';
-import BottomNavigation from '../components/BottomNavigation';
+import { useNavigation } from '@react-navigation/native';
+import type { NavigationProp } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Goal, GoalService } from '../services/GoalService';
 import { StoredUser, UserService } from '../services/UserService';
+import { RootStackParamList } from '../types/types';
 
-interface PublicCommitmentsScreenProps {
-  navigation: any;
-  route: any;
-}
-
-const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
-  navigation,
-  route,
-}) => {
+const PublicCommitmentsScreen: React.FC = () => {
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const [selectedImage, setSelectedImage] = useState<any>(null);
   const [currentUser, setCurrentUser] = useState<StoredUser | null>(null);
   const [allUsers, setAllUsers] = useState<StoredUser[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Obtener userId de la navegación o fallback
-  const userId = route?.params?.userId || 'user-cesar-1753750573601';
-
-  useEffect(() => {
-    loadData();
-  }, [userId]);
+  // Obtener userId desde AsyncStorage
+  const getUserId = async () => {
+    try {
+      const storedUserId = await AsyncStorage.getItem('currentUserId');
+      return storedUserId || 'user-cesar-1753750573601';
+    } catch (error) {
+      console.error('Error getting userId:', error);
+      return 'user-cesar-1753750573601';
+    }
+  };
 
   const loadData = async () => {
     try {
       setIsLoading(true);
+      const userId = await getUserId();
 
-      // Cargar usuario actual
-      const user = await UserService.getUser(userId);
+      const [user, users, userGoals] = await Promise.all([
+        UserService.getUser(userId),
+        UserService.getAllUsers(),
+        GoalService.getUserGoals(userId)
+      ]);
+
       setCurrentUser(user);
-
-      // Cargar todos los usuarios
-      const users = await UserService.getAllUsers();
       setAllUsers(users);
-
-      // Cargar todas las metas del usuario
-      const userGoals = await GoalService.getUserGoals(userId);
       setGoals(userGoals);
-
     } catch (error) {
       console.error('Error loading data:', error);
       Alert.alert('Error', 'No se pudieron cargar los datos.');
@@ -61,9 +59,27 @@ const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
     }
   };
 
+  useEffect(() => {
+    loadData();
+
+    // Escuchar cambios en tiempo real
+    const unsubscribeUsers = UserService.listenToUsers(setAllUsers);
+    const unsubscribeGoals = GoalService.listenToGoals((allGoals) => {
+      getUserId().then(userId => {
+        const userGoals = allGoals.filter(goal => goal.userId === userId);
+        setGoals(userGoals);
+      });
+    });
+
+    return () => {
+      unsubscribeUsers();
+      unsubscribeGoals();
+    };
+  }, []);
+
   const publicGoals = goals.filter(goal => goal.isPublic);
   const currentCommitment = publicGoals.find(goal => !goal.isCompleted && !goal.isIncomplete);
-  const otherUsers = allUsers.filter(user => user.id !== userId);
+  const otherUsers = allUsers.filter(user => user.id !== currentUser?.id);
 
   const handleSelectImage = async () => {
     try {
@@ -166,16 +182,9 @@ const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-          activeOpacity={0.7}
-        >
-          <Feather name="arrow-left" size={24} color="#2D3748" />
-        </TouchableOpacity>
         <Text style={styles.headerTitle}>Compromisos Públicos</Text>
         <View style={styles.headerRight}>
-          <Text style={styles.userPoints}>{currentUser.points} pts</Text>
+          <Text style={styles.userPoints}>{currentUser?.points || 0} pts</Text>
         </View>
       </View>
 
@@ -266,7 +275,10 @@ const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
             </Text>
             <TouchableOpacity
               style={styles.createGoalButton}
-              onPress={() => navigation.navigate('CreateGoal', { userId, userName: currentUser.name })}
+              onPress={async () => {
+                const userId = await getUserId();
+                navigation.navigate('CreateGoal', { userId, userName: currentUser?.name || '' });
+              }}
             >
               <Feather name="plus" size={16} color="#FFFFFF" />
               <Text style={styles.createGoalButtonText}>Crear Meta Pública</Text>
@@ -311,14 +323,6 @@ const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
           </View>
         </View>
       </ScrollView>
-
-      {/* Bottom Navigation */}
-      <BottomNavigation 
-        navigation={navigation} 
-        currentScreen="PublicCommitments"
-        userId={userId}
-        userName={currentUser?.name}
-      />
     </SafeAreaView>
   );
 };
