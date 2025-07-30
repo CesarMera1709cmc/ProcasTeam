@@ -12,6 +12,7 @@ import {
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../types/types';
 import { UserService, StoredUser } from '../services/UserService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type HomeScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -44,12 +45,19 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     navigation.navigate('UserInput', { userType });
   };
 
-  const selectExistingUser = (user: StoredUser) => {
-    // Navegar directo al Dashboard
-    navigation.replace('Dashboard', {
-      userId: user.id,
-      userName: user.name
-    });
+  const selectExistingUser = async (user: StoredUser) => {
+    try {
+      // Guardar el ID del usuario seleccionado en AsyncStorage
+      await AsyncStorage.setItem('currentUserId', user.id);
+      
+      // Navegar directo al Dashboard
+      navigation.replace('Dashboard', {
+        userId: user.id,
+        userName: user.name
+      });
+    } catch (error) {
+      console.error('Error selecting user:', error);
+    }
   };
 
   return (

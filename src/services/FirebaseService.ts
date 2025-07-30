@@ -3,13 +3,14 @@ import { getDatabase, ref, set, get, onValue, off, push, remove, update } from '
 
 // Configuración de Firebase
 const firebaseConfig = {
-  apiKey: "AIzaSyDSGVlT9Gu9-uIIhkWJUL2y8KsFWJTtBkQ",
-  authDomain: "procasteam-3ae58.firebaseapp.com",
-  databaseURL: "https://procasteam-3ae58-default-rtdb.firebaseio.com",
-  projectId: "procasteam-3ae58",
-  storageBucket: "procasteam-3ae58.firebasestorage.app",
-  messagingSenderId: "738064056308",
-  appId: "1:738064056308:web:d75e2f5db05ac7e34b42db"
+  apiKey: "AIzaSyCGDsjIoobNvtPLkoe0zqr6VUVBHx6z6GM",
+  authDomain: "baseprocasteam.firebaseapp.com",
+  databaseURL: "https://baseprocasteam-default-rtdb.firebaseio.com",
+  projectId: "baseprocasteam",
+  storageBucket: "baseprocasteam.firebasestorage.app",
+  messagingSenderId: "838864503589",
+  appId: "1:838864503589:web:98211e9f168019817250cc",
+  measurementId: "G-0LY03GW4W3"
 };
 
 // Inicializar Firebase

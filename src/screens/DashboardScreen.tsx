@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { UserService, StoredUser } from '../services/UserService';
 import { GoalService, Goal } from '../services/GoalService';
 import { RootStackParamList } from '../types/types';
+import { CategoryGoalsModal, GoalDetailModal } from '../components/DashboardModals';
 
 const DashboardScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
@@ -22,6 +23,11 @@ const DashboardScreen: React.FC = () => {
   const [allUsers, setAllUsers] = useState<StoredUser[]>([]);
   const [userGoals, setUserGoals] = useState<Goal[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const goalsCarouselRef = useRef<ScrollView>(null);
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<{ title: string; goals: Goal[]; color: string } | null>(null);
+  const [goalDetailModalVisible, setGoalDetailModalVisible] = useState(false);
+  const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
 
   // Obtener userId desde AsyncStorage
   const getUserId = async () => {
@@ -103,7 +109,10 @@ const DashboardScreen: React.FC = () => {
     const goalDate = new Date(goal.dueDate);
     const goalDateOnly = new Date(goalDate.getFullYear(), goalDate.getMonth(), goalDate.getDate());
     
-    if (goalDateOnly.getTime() === today.getTime()) {
+    // Una meta está vencida si su fecha es anterior a hoy Y no ha sido procesada.
+    if (goalDateOnly < today && !goal.isCompleted && !goal.isIncomplete) {
+      acc.overdue.push(goal);
+    } else if (goalDateOnly.getTime() === today.getTime()) {
       acc.today.push(goal);
     } else if (goalDateOnly.getTime() === tomorrow.getTime()) {
       acc.tomorrow.push(goal);
@@ -111,8 +120,6 @@ const DashboardScreen: React.FC = () => {
       acc.thisWeek.push(goal);
     } else if (goalDateOnly > thisWeekEnd) {
       acc.later.push(goal);
-    } else {
-      acc.overdue.push(goal);
     }
     
     return acc;
@@ -176,6 +183,17 @@ const DashboardScreen: React.FC = () => {
     });
   }
 
+  // Efecto para centrar las metas de "Hoy" si existen metas "Vencidas"
+  useEffect(() => {
+    const hasOverdueGoals = goalCategories.find(c => c.id === 'overdue');
+    if (hasOverdueGoals) {
+      // Usamos un timeout para asegurar que el scrollview se haya renderizado
+      setTimeout(() => {
+        goalsCarouselRef.current?.scrollTo({ x: 316, animated: false });
+      }, 100);
+    }
+  }, [goalCategories, isLoading]);
+
   const completedGoals = userGoals.filter(goal => goal.isCompleted);
   const totalPoints = completedGoals.reduce((sum, goal) => sum + goal.points, 0);
   const failedGoals = userGoals.filter(goal => !goal.isCompleted);
@@ -201,80 +219,70 @@ const DashboardScreen: React.FC = () => {
     });
   };
 
-  const handleToggleGoal = async (goalId: string, completed: boolean) => {
-    if (completed) {
-      // Encontrar la meta antes de completarla
-      const goal = userGoals.find(g => g.id === goalId);
-      if (!goal) {
-        Alert.alert('Error', 'Meta no encontrada.');
-        return;
-      }
-
-      Alert.alert(
-        '¿Qué pasó con tu meta? 🤔',
-        `"${goal.title}"\n\n¿La completaste o no pudiste terminarla?`,
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { 
-            text: '❌ No completé', 
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                console.log(`📉 Marcando meta como no completada: ${goal.title}`);
-                
-                await GoalService.markGoalAsIncomplete(goalId);
-                
-                // Mostrar feedback para meta no completida
-                Alert.alert(
-                  'Meta no completada 😔', 
-                  `No pasa nada, "${goal.title}" se marcó como no completada.\n\n` +
-                  `Perdiste -${goal.points} puntos potenciales, pero ¡puedes crear una nueva meta! 💪`,
-                  [{ text: 'Entendido', style: 'default' }]
-                );
-                
-              } catch (error) {
-                console.error('❌ Error marking goal as incomplete:', error);
-                Alert.alert('Error', 'No se pudo procesar la meta. Inténtalo de nuevo.');
-              }
-            }
-          },
-          { 
-            text: '✅ Sí completé', 
-            onPress: async () => {
-              try {
-                console.log(`🎯 Completando meta: ${goal.title}`);
-                
-                await GoalService.completeGoal(goalId);
-                
-                // Mostrar feedback positivo
-                Alert.alert(
-                  '¡Excelente! 🏆', 
-                  `¡Completaste "${goal.title}"!\n\nHas ganado +${goal.points} puntos 🎯\n\n¡Sigue así!`,
-                  [{ text: 'Genial!', style: 'default' }]
-                );
-                
-              } catch (error) {
-                console.error('❌ Error completing goal:', error);
-                
-                const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-                
-                Alert.alert(
-                  'Error al completar meta', 
-                  `No se pudo completar la meta.\n\nDetalle: ${errorMessage}\n\n¿Tienes conexión a internet?`,
-                  [
-                    { text: 'Reintentar', onPress: () => handleToggleGoal(goalId, completed) },
-                    { text: 'Cancelar', style: 'cancel' }
-                  ]
-                );
-              }
-            }
-          },
-        ]
-      );
+  const handleGoalPress = (goal: Goal) => {
+    if (!goal.isCompleted && !goal.isIncomplete) {
+      setSelectedGoal(goal);
+      setGoalDetailModalVisible(true);
     }
   };
 
-  const GoalCard = ({ goal, compact = false, categoryColor }: { goal: Goal, compact?: boolean, categoryColor?: string }) => {
+  const handleCompleteGoal = async () => {
+    if (!selectedGoal) return;
+    const goalId = selectedGoal.id;
+    const goalTitle = selectedGoal.title;
+    const goalPoints = selectedGoal.points;
+
+    setGoalDetailModalVisible(false);
+
+    try {
+      console.log(`🎯 Completando meta: ${goalTitle}`);
+      await GoalService.completeGoal(goalId);
+      
+      Alert.alert(
+        '¡Excelente! 🏆', 
+        `¡Completaste "${goalTitle}"!\n\nHas ganado +${goalPoints} puntos 🎯\n\n¡Sigue así!`,
+        [{ text: 'Genial!', style: 'default' }]
+      );
+    } catch (error) {
+      console.error('❌ Error completing goal:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+      Alert.alert(
+        'Error al completar meta', 
+        `No se pudo completar la meta.\n\nDetalle: ${errorMessage}`,
+        [{ text: 'Entendido' }]
+      );
+    } finally {
+      setSelectedGoal(null);
+    }
+  };
+
+  const handleIncompleteGoal = async () => {
+    if (!selectedGoal) return;
+    const goalId = selectedGoal.id;
+    const goalTitle = selectedGoal.title;
+    const goalPoints = selectedGoal.points;
+
+    setGoalDetailModalVisible(false);
+
+    try {
+      console.log(`📉 Marcando meta como no completada: ${goalTitle}`);
+      await GoalService.markGoalAsIncomplete(goalId);
+      
+      Alert.alert(
+        'Meta no completada 😔', 
+        `No pasa nada, "${goalTitle}" se marcó como no completada.\n\n` +
+        `Perdiste -${goalPoints} puntos potenciales, pero ¡puedes crear una nueva meta! 💪`,
+        [{ text: 'Entendido', style: 'default' }]
+      );
+    } catch (error) {
+      console.error('❌ Error marking goal as incomplete:', error);
+      Alert.alert('Error', 'No se pudo procesar la meta. Inténtalo de nuevo.');
+    } finally {
+      setSelectedGoal(null);
+    }
+  };
+
+  const GoalCard = ({ goal, compact = false, categoryColor, isOverdue = false }: { goal: Goal, compact?: boolean, categoryColor?: string, isOverdue?: boolean }) => {
     const getStatusIcon = () => {
       if (goal.isCompleted) {
         return <Feather name="check" size={12} color="#FFFFFF" />;
@@ -330,9 +338,9 @@ const DashboardScreen: React.FC = () => {
             borderColor: getBorderColor()
           }
         ]}
-        onPress={() => handleToggleGoal(goal.id, !goal.isCompleted && !goal.isIncomplete)}
+        onPress={() => handleGoalPress(goal)}
         activeOpacity={0.7}
-        disabled={goal.isCompleted || goal.isIncomplete} // Deshabilitar si ya está procesada
+        disabled={!isOverdue && (goal.isCompleted || goal.isIncomplete)} // Habilitar si es vencida, de lo contrario deshabilitar si ya está procesada
       >
         <View style={[
           compact ? styles.goalStatusCompact : styles.goalStatus, 
@@ -381,64 +389,6 @@ const DashboardScreen: React.FC = () => {
     );
   };
 
-  const RankingCard = ({ users, currentUserId }: { users: StoredUser[], currentUserId: string }) => (
-    <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <Text style={styles.cardTitle}>Ranking del Grupo</Text>
-        <TouchableOpacity
-          onPress={() => navigation.navigate('Team', { currentUserId })}
-          style={styles.viewAllButton}
-        >
-          <Text style={styles.viewAllText}>Ver todos</Text>
-          <Feather name="arrow-right" size={16} color="#4299E1" />
-        </TouchableOpacity>
-      </View>
-      
-      <View style={styles.rankingList}>
-        {users.length === 0 ? (
-          <Text style={styles.emptyMessage}>
-            Aún no hay otros usuarios en el equipo
-          </Text>
-        ) : (
-          users.slice(0, 5).map((user, index) => {
-            const isCurrentUser = user.id === currentUserId;
-            const rank = index + 1;
-            
-            return (
-              <View 
-                key={user.id}
-                style={[
-                  styles.rankingItem,
-                  rank === 1 ? styles.firstPlace : 
-                  isCurrentUser ? styles.currentUser : styles.regularUser
-                ]}
-              >
-                <View style={[
-                  styles.rankBadge,
-                  { backgroundColor: rank === 1 ? '#F6AD55' : 
-                    isCurrentUser ? '#4299E1' : '#A0AEC0' }
-                ]}>
-                  <Text style={styles.rankNumber}>{rank}</Text>
-                </View>
-                <View style={styles.rankingInfo}>
-                  <Text style={styles.userName}>
-                    {user.name}{isCurrentUser ? ' (Tú)' : ''}
-                  </Text>
-                </View>
-                <Text style={[
-                  styles.userPoints,
-                  { color: rank === 1 ? '#38A169' : '#2D3748' }
-                ]}>
-                  {user.points} pts
-                </Text>
-              </View>
-            );
-          })
-        )}
-      </View>
-    </View>
-  );
-
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -451,30 +401,34 @@ const DashboardScreen: React.FC = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.greeting}>¡Hola, {currentUser?.name || 'Usuario'}! 👋</Text>
-            <Text style={styles.date}>{formatDate()}</Text>
-          </View>
-          <View style={styles.headerRight}>
-            <TouchableOpacity
-              style={styles.teamButton}
-              onPress={async () => {
-                const userId = await getUserId();
-                navigation.navigate('Team', { currentUserId: userId });
-              }}
-            >
-              <Feather name="users" size={20} color="#4299E1" />
-            </TouchableOpacity>
-            <View style={styles.pointsContainer}>
-              <Text style={styles.points}>{currentUser?.points || 0}</Text>
-              <Text style={styles.pointsLabel}>puntos</Text>
-            </View>
+      {/* Header fijo */}
+      <View style={styles.fixedHeader}>
+        <View>
+          <Text style={styles.greeting}>¡Hola, {currentUser?.name || 'Usuario'}! 👋</Text>
+          <Text style={styles.date}>{formatDate()}</Text>
+        </View>
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={styles.teamButton}
+            onPress={async () => {
+              const userId = await getUserId();
+              navigation.navigate('Team', { currentUserId: userId });
+            }}
+          >
+            <Feather name="users" size={20} color="#4299E1" />
+          </TouchableOpacity>
+          <View style={styles.pointsContainer}>
+            <Text style={styles.points}>{currentUser?.points || 0}</Text>
+            <Text style={styles.pointsLabel}>puntos</Text>
           </View>
         </View>
+      </View>
 
+      <ScrollView
+        style={styles.scrollViewWithHeader}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingTop: 114 }} // Aumentado para el nuevo alto del header
+      >
         {/* Goals Categories Carousel */}
         <View style={styles.goalsCarouselContainer}>
           <View style={styles.carouselHeader}>
@@ -483,11 +437,12 @@ const DashboardScreen: React.FC = () => {
           </View>
           
           <ScrollView 
+            ref={goalsCarouselRef}
             horizontal 
             showsHorizontalScrollIndicator={false}
             style={styles.goalsCarousel}
             contentContainerStyle={styles.carouselContent}
-            snapToInterval={320} // Ancho de cada tarjeta + margen
+            snapToInterval={320}
             decelerationRate="fast"
           >
             {goalCategories.map((category, index) => (
@@ -496,10 +451,10 @@ const DashboardScreen: React.FC = () => {
                 index === 0 && styles.firstCard,
                 index === goalCategories.length - 1 && styles.lastCard
               ]}>
-                {/* Header de la categoría */}
+                {/* Header de la categoría sin emoji */}
                 <View style={[styles.categoryHeader, { borderTopColor: category.color }]}>
                   <View style={styles.categoryTitleRow}>
-                    <Text style={styles.categoryEmoji}>{category.emoji}</Text>
+                    {/* <Text style={styles.categoryEmoji}>{category.emoji}</Text> */}
                     <Text style={styles.categoryTitle}>{category.title}</Text>
                   </View>
                   <Text style={[styles.categorySubtitle, { color: category.color }]}>
@@ -516,6 +471,7 @@ const DashboardScreen: React.FC = () => {
                         goal={goal} 
                         compact={true}
                         categoryColor={category.color}
+                        isOverdue={category.id === 'overdue'}
                       />
                     ))
                   ) : (
@@ -533,7 +489,14 @@ const DashboardScreen: React.FC = () => {
                   
                   {/* Mostrar "ver más" si hay más de 3 metas */}
                   {category.goals.length > 3 && (
-                    <TouchableOpacity style={styles.viewMoreButton}>
+                    <TouchableOpacity 
+                      style={styles.viewMoreButton}
+                      onPress={() => handleViewMore({ 
+                        title: category.title, 
+                        goals: category.goals,
+                        color: category.color
+                      })}
+                    >
                       <Text style={[styles.viewMoreText, { color: category.color }]}>
                         Ver todas ({category.goals.length})
                       </Text>
@@ -562,8 +525,8 @@ const DashboardScreen: React.FC = () => {
           </ScrollView>
         </View>
 
-        {/* Ranking Card */}
-        <RankingCard users={allUsers} currentUserId={currentUser?.id || ''} />
+        {/* Spacer Text */}
+        <Text> </Text>
 
         {/* Notifications Card */}
         <View style={styles.card}>
@@ -591,6 +554,25 @@ const DashboardScreen: React.FC = () => {
         </View>
       </ScrollView>
 
+      {/* Modal para ver todas las metas de una categoría */}
+      <CategoryGoalsModal 
+        visible={isModalVisible}
+        onClose={handleCloseModal}
+        category={selectedCategory}
+      />
+
+      {/* Modal para detalles de una meta */}
+      <GoalDetailModal 
+        visible={goalDetailModalVisible}
+        onClose={() => {
+          setGoalDetailModalVisible(false);
+          setSelectedGoal(null);
+        }}
+        goal={selectedGoal}
+        onComplete={handleCompleteGoal}
+        onIncomplete={handleIncompleteGoal}
+      />
+
       {/* Floating Action Button */}
       <TouchableOpacity
         style={styles.fab}
@@ -611,6 +593,22 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F7FAFC',
   },
+  fixedHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    backgroundColor: '#FFFFFF', // Cambiado a blanco
+    paddingHorizontal: 16,
+    paddingTop: 40, // Aumentado para bajar los elementos
+    paddingBottom: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -623,6 +621,11 @@ const styles = StyleSheet.create({
   scrollView: {
     flex: 1,
     paddingHorizontal: 16,
+    paddingBottom: 80,
+  },
+  scrollViewWithHeader: {
+    flex: 1,
+    paddingHorizontal: 16, 
     paddingBottom: 80,
   },
   header: {
@@ -799,7 +802,7 @@ const styles = StyleSheet.create({
   
   // Estilos del carrusel
   goalsCarouselContainer: {
-    marginBottom: 24,
+    marginBottom: 12, // Reducido para combinar con el texto espaciador
   },
   carouselHeader: {
     paddingHorizontal: 4,
@@ -853,9 +856,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 4,
   },
+  // Elimina el emoji visualmente
   categoryEmoji: {
-    fontSize: 20,
-    marginRight: 8,
+    display: 'none',
   },
   categoryTitle: {
     fontSize: 16,
@@ -912,55 +915,6 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 14,
     fontWeight: '600',
-  },
-
-  // Estilos del ranking
-  rankingList: {
-    gap: 12,
-  },
-  rankingItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    borderRadius: 12,
-  },
-  firstPlace: {
-    backgroundColor: '#FFFBEB',
-    borderWidth: 1,
-    borderColor: '#F6AD55',
-  },
-  currentUser: {
-    backgroundColor: '#EBF8FF',
-    borderWidth: 1,
-    borderColor: '#4299E1',
-  },
-  regularUser: {
-    backgroundColor: '#F7FAFC',
-  },
-  rankBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  rankNumber: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  rankingInfo: {
-    flex: 1,
-  },
-  userName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#2D3748',
-  },
-  userPoints: {
-    fontSize: 16,
-    fontWeight: 'bold',
   },
 
   // Estilos de notificaciones
