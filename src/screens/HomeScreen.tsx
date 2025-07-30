@@ -6,28 +6,23 @@ import {
   StyleSheet,
   SafeAreaView,
   Dimensions,
+  Image,
 } from 'react-native';
-import Feather from 'react-native-vector-icons/Feather';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { RootStackParamList } from '../types/types';
 
 const { width } = Dimensions.get('window');
-
-type RootStackParamList = {
-  Home: undefined;
-  Dashboard: undefined;
-};
 
 type HomeScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Home'>;
 
 interface HomeScreenProps {
   navigation: HomeScreenNavigationProp;
-  onSelectUser: (userName: string) => void;
 }
 
-const HomeScreen: React.FC<HomeScreenProps> = ({ navigation, onSelectUser }) => {
-  const selectUser = (userName: string) => {
-    onSelectUser(userName);
-    navigation.navigate('Dashboard');
+const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
+  const selectUser = (userType: string) => {
+    // Navegar a la pantalla de captura de nombre
+    navigation.navigate('UserInput', { userType });
   };
 
   return (
@@ -35,18 +30,18 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation, onSelectUser }) => 
       <View style={styles.content}>
         {/* Logo */}
         <View style={styles.logoContainer}>
-          <View style={styles.logoBox}>
-            <Feather name="graduation-cap" size={48} color="#2D3748" />
-            <Text style={styles.logoSubtext}>😴 ZZ</Text>
-          </View>
+          <Image 
+            source={require('../images/procasteamlogo.jpg')}
+            style={styles.logoImage}
+            resizeMode="contain"
+          />
         </View>
 
         {/* Title */}
         <View style={styles.titleContainer}>
-          <Text style={styles.welcomeText}>Bienvenido a</Text>
-          <Text style={styles.appName}>ProcrasTeam</Text>
+          <Text style={styles.welcomeText}>Bienvenido</Text>
           <Text style={styles.subtitle}>
-            Vence la procrastinación con presión social positiva
+            Vence la procrastinación con presión social positiva, te unes con amigos, compartes tus metas diarias, y pierdes puntos o debes hacer retos si no cumples.
           </Text>
         </View>
 
@@ -54,21 +49,11 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation, onSelectUser }) => 
         <View style={styles.buttonContainer}>
           <TouchableOpacity
             style={styles.primaryButton}
-            onPress={() => selectUser('Ana')}
+            onPress={() => selectUser('user')}
             activeOpacity={0.8}
           >
             <Text style={styles.primaryButtonText}>
-              👤 Continuar como Ana
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={() => selectUser('Luis')}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.secondaryButtonText}>
-              👤 Continuar como Luis
+              👤 Crear Usuario
             </Text>
           </TouchableOpacity>
         </View>
@@ -80,7 +65,7 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation, onSelectUser }) => 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F7FAFC',
+    backgroundColor: '#FFFFFF',
   },
   content: {
     flex: 1,
@@ -91,25 +76,10 @@ const styles = StyleSheet.create({
   logoContainer: {
     marginBottom: 32,
   },
-  logoBox: {
-    width: 128,
-    height: 128,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  logoSubtext: {
-    fontSize: 12,
-    marginTop: 4,
+  logoImage: {
+    width: 120,
+    height: 120,
+    borderRadius: 12,
   },
   titleContainer: {
     alignItems: 'center',
@@ -120,12 +90,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#2D3748',
     marginBottom: 8,
-  },
-  appName: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#2D3748',
-    marginBottom: 16,
   },
   subtitle: {
     fontSize: 16,

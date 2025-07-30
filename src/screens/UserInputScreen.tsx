@@ -1,0 +1,294 @@
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  SafeAreaView,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RouteProp } from '@react-navigation/native';
+import { RootStackParamList } from '../types/types';
+import { UserService, StoredUser } from '../services/UserService';
+
+type UserInputScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'UserInput'>;
+type UserInputScreenRouteProp = RouteProp<RootStackParamList, 'UserInput'>;
+
+interface UserInputScreenProps {
+  navigation: UserInputScreenNavigationProp;
+  route: UserInputScreenRouteProp;
+}
+
+const UserInputScreen: React.FC<UserInputScreenProps> = ({ navigation, route }) => {
+  const { userType } = route.params;
+  const [userName, setUserName] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [existingUsers, setExistingUsers] = useState<StoredUser[]>([]);
+
+  useEffect(() => {
+    const loadExistingUsers = async () => {
+      const users = await UserService.getAllUsers();
+      setExistingUsers(users);
+    };
+    loadExistingUsers();
+  }, []);
+
+  const handleContinue = async () => {
+    if (userName.trim() === '') {
+      Alert.alert('Error', 'Por favor ingresa tu nombre');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      // Generar un ID único basado en el tipo de usuario, nombre y timestamp
+      const userId = `${userType}-${userName.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
+      
+      // Crear el objeto de usuario para almacenar
+      const newUser: StoredUser = {
+        id: userId,
+        name: userName.trim(),
+        userType,
+        points: 0,
+        joinedAt: new Date().toISOString(),
+        lastActive: new Date().toISOString(),
+      };
+
+      // Guardar el usuario en AsyncStorage
+      await UserService.addUser(newUser);
+
+      // Navegar al Dashboard
+      navigation.navigate('Dashboard', { 
+        userId, 
+        userName: userName.trim() 
+      });
+    } catch (error) {
+      console.error('Error saving user:', error);
+      Alert.alert('Error', 'Hubo un problema al guardar tu información');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.content}>
+        <View style={styles.headerContainer}>
+          <Text style={styles.title}>¡Perfecto!</Text>
+          <Text style={styles.subtitle}>
+            Elegiste ser {userType === 'user1' ? 'Usuario 1' : 'Usuario 2'}
+          </Text>
+          <Text style={styles.description}>
+            Ahora cuéntanos, ¿cómo te llamas?
+          </Text>
+        </View>
+
+        <View style={styles.inputContainer}>
+          <Text style={styles.inputLabel}>Tu nombre</Text>
+          <TextInput
+            style={styles.textInput}
+            value={userName}
+            onChangeText={setUserName}
+            placeholder="Escribe tu nombre aquí"
+            placeholderTextColor="#A0AEC0"
+            autoCapitalize="words"
+            autoCorrect={false}
+            maxLength={30}
+            editable={!isLoading}
+          />
+        </View>
+
+        <View style={styles.buttonContainer}>
+          <TouchableOpacity
+            style={[
+              styles.continueButton,
+              (userName.trim() === '' || isLoading) && styles.continueButtonDisabled
+            ]}
+            onPress={handleContinue}
+            activeOpacity={0.8}
+            disabled={userName.trim() === '' || isLoading}
+          >
+            {isLoading ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={[
+                styles.continueButtonText,
+                userName.trim() === '' && styles.continueButtonTextDisabled
+              ]}>
+                Continuar
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.8}
+            disabled={isLoading}
+          >
+            <Text style={styles.backButtonText}>Volver</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Mostrar usuarios existentes */}
+        {existingUsers.length > 0 && (
+          <View style={styles.existingUsersContainer}>
+            <Text style={styles.existingUsersTitle}>Usuarios existentes:</Text>
+            {existingUsers.map(user => (
+              <TouchableOpacity
+                key={user.id}
+                style={styles.existingUserItem}
+                onPress={() => {
+                  navigation.navigate('Dashboard', { 
+                    userId: user.id, 
+                    userName: user.name 
+                  });
+                }}
+              >
+                <Text style={styles.existingUserName}>{user.name}</Text>
+                <Text style={styles.existingUserPoints}>{user.points} pts</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+      </View>
+    </SafeAreaView>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  content: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  headerContainer: {
+    alignItems: 'center',
+    marginBottom: 48,
+  },
+  title: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: '#2D3748',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 18,
+    color: '#4299E1',
+    marginBottom: 16,
+    fontWeight: '600',
+  },
+  description: {
+    fontSize: 16,
+    color: '#718096',
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  inputContainer: {
+    width: '100%',
+    marginBottom: 48,
+  },
+  inputLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2D3748',
+    marginBottom: 8,
+  },
+  textInput: {
+    backgroundColor: '#F7FAFC',
+    borderWidth: 2,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#2D3748',
+  },
+  buttonContainer: {
+    width: '100%',
+    gap: 16,
+  },
+  continueButton: {
+    backgroundColor: '#2D3748',
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  continueButtonDisabled: {
+    backgroundColor: '#A0AEC0',
+  },
+  continueButtonText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  continueButtonTextDisabled: {
+    color: '#E2E8F0',
+  },
+  backButton: {
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#E2E8F0',
+  },
+  backButtonText: {
+    color: '#718096',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  existingUsersContainer: {
+    width: '100%',
+    marginTop: 32,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  existingUsersTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#2D3748',
+    marginBottom: 16,
+  },
+  existingUserItem: {
+    backgroundColor: '#F7FAFC',
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  existingUserName: {
+    fontSize: 16,
+    color: '#2D3748',
+    fontWeight: '500',
+  },
+  existingUserPoints: {
+    fontSize: 16,
+    color: '#718096',
+    fontWeight: '500',
+  },
+});
+
+export default UserInputScreen;
