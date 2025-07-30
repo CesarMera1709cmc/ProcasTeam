@@ -1,199 +1,158 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { database, ref, set, onValue, off, get } from './FirebaseService';
+import { database, ref, set, onValue, off, get, push } from './FirebaseService';
 
 export interface StoredUser {
   id: string;
   name: string;
   userType: string;
   points: number;
+  streak: number;
   joinedAt: string;
   lastActive: string;
+  level?: number;
+  longestStreak?: number;
+  challengesCompleted?: number;
+  firebaseKey?: string; // ✅ Agregada para almacenar la clave de Firebase
 }
 
-const USERS_STORAGE_KEY = 'procas_team_users';
-
 export class UserService {
-  // Obtener todos los usuarios (Firebase + fallback local)
-  static async getAllUsers(): Promise<StoredUser[]> {
-    try {
-      console.log('📡 Cargando usuarios desde Firebase...');
-      const usersRef = ref(database, 'users');
-      const snapshot = await get(usersRef);
-      
-      if (snapshot.exists()) {
-        const usersData = snapshot.val();
-        const usersList = Object.values(usersData) as StoredUser[];
-        
-        // Guardar backup local
-        await AsyncStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(usersList));
-        console.log('✅ Usuarios cargados desde Firebase:', usersList.length);
-        
-        return usersList;
-      } else {
-        console.log('📭 No hay usuarios en Firebase');
-        return [];
-      }
-    } catch (error) {
-      console.error('❌ Error loading users from Firebase:', error);
-      
-      // Fallback: usar datos locales
-      try {
-        const usersJson = await AsyncStorage.getItem(USERS_STORAGE_KEY);
-        const localUsers = usersJson ? JSON.parse(usersJson) : [];
-        console.log('📱 Usando datos locales como fallback:', localUsers.length);
-        return localUsers;
-      } catch (localError) {
-        console.error('❌ Error loading local users:', localError);
-        return [];
-      }
-    }
-  }
+  private static basePath = 'users';
 
-  // Agregar usuario (Firebase + local)
+  // Crear usuario
   static async addUser(user: StoredUser): Promise<void> {
     try {
-      console.log('💾 Guardando usuario en Firebase:', user.name);
-      const userRef = ref(database, `users/${user.id}`);
-      await set(userRef, user);
-      
-      console.log('✅ Usuario guardado en Firebase:', user.name);
-      
-      // También guardar localmente como backup
-      await this.addUserLocal(user);
+      const usersRef = ref(database, this.basePath);
+      const newUserRef = push(usersRef);
+      await set(newUserRef, user);
+      console.log('Usuario guardado exitosamente');
     } catch (error) {
-      console.error('❌ Error saving user to Firebase:', error);
-      
-      // Fallback: guardar solo localmente
-      console.log('🔄 Guardando localmente como fallback...');
-      await this.addUserLocal(user);
+      console.error('Error guardando usuario:', error);
+      throw error;
     }
   }
 
-  // Actualizar puntos del usuario
-  static async updateUserPoints(userId: string, points: number): Promise<void> {
+  // Obtener usuario por ID
+  static async getUser(userId: string): Promise<StoredUser> {
     try {
-      console.log('🔄 Actualizando puntos en Firebase:', userId, points);
+      const usersRef = ref(database, this.basePath);
+      const snapshot = await get(usersRef);
       
-      // Obtener usuario actual de Firebase
-      const userRef = ref(database, `users/${userId}`);
-      const snapshot = await get(userRef);
-      
-      if (snapshot.exists()) {
-        const userData = snapshot.val();
-        const updatedUser = {
-          ...userData,
-          points: points,
-          lastActive: new Date().toISOString()
-        };
-        
-        await set(userRef, updatedUser);
-        console.log('✅ Puntos actualizados en Firebase para:', userData.name);
+      if (!snapshot.exists()) {
+        throw new Error(`Usuario no encontrado: ${userId}`);
       }
+
+      const usersData = snapshot.val();
+      let foundUser: StoredUser | null = null;
+
+      Object.keys(usersData).forEach(key => {
+        const user = usersData[key] as StoredUser;
+        if (user.id === userId) {
+          foundUser = { ...user, firebaseKey: key };
+        }
+      });
+
+      if (!foundUser) {
+        throw new Error(`Usuario no encontrado: ${userId}`);
+      }
+      
+      return foundUser;
     } catch (error) {
-      console.error('❌ Error updating points in Firebase:', error);
-      
-      // Fallback local
-      const users = await this.getAllUsersLocal();
-      const userIndex = users.findIndex(u => u.id === userId);
-      
-      if (userIndex >= 0) {
-        users[userIndex].points = points;
-        users[userIndex].lastActive = new Date().toISOString();
-        await AsyncStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-        console.log('📱 Puntos actualizados localmente');
-      }
+      console.error('Error obteniendo usuario:', error);
+      throw error;
     }
   }
 
-  // Obtener usuario específico
-  static async getUser(userId: string): Promise<StoredUser | null> {
+  // Obtener todos los usuarios
+  static async getAllUsers(): Promise<StoredUser[]> {
     try {
-      const userRef = ref(database, `users/${userId}`);
-      const snapshot = await get(userRef);
+      const usersRef = ref(database, this.basePath);
+      const snapshot = await get(usersRef);
       
-      if (snapshot.exists()) {
-        return snapshot.val() as StoredUser;
+      if (!snapshot.exists()) {
+        return [];
       }
-      return null;
+
+      const usersData = snapshot.val();
+      const users: StoredUser[] = [];
+
+      Object.keys(usersData).forEach(key => {
+        const user = usersData[key] as StoredUser;
+        users.push({ ...user, firebaseKey: key });
+      });
+
+      return users;
     } catch (error) {
-      console.error('❌ Error getting user from Firebase:', error);
-      
-      // Fallback local
-      const users = await this.getAllUsersLocal();
-      return users.find(u => u.id === userId) || null;
-    }
-  }
-
-  // 🔥 TIEMPO REAL: Escuchar cambios
-  static listenToUsers(callback: (users: StoredUser[]) => void): () => void {
-    console.log('👂 Iniciando listener de tiempo real...');
-    const usersRef = ref(database, 'users');
-    
-    const unsubscribe = onValue(usersRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const usersData = snapshot.val();
-        const usersList = Object.values(usersData) as StoredUser[];
-        
-        console.log('🔄 Usuarios actualizados en TIEMPO REAL:', usersList.map(u => u.name));
-        callback(usersList);
-        
-        // Guardar backup local
-        AsyncStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(usersList));
-      } else {
-        console.log('📭 No hay usuarios (tiempo real)');
-        callback([]);
-      }
-    }, (error) => {
-      console.error('❌ Error en listener de Firebase:', error);
-    });
-
-    return () => {
-      console.log('🔇 Desconectando listener de tiempo real');
-      off(usersRef, 'value', unsubscribe);
-    };
-  }
-
-  // Limpiar todos los usuarios
-  static async clearAllUsers(): Promise<void> {
-    try {
-      console.log('🗑️ Eliminando todos los usuarios...');
-      const usersRef = ref(database, 'users');
-      await set(usersRef, null);
-      console.log('✅ Usuarios eliminados de Firebase');
-      
-      await AsyncStorage.removeItem(USERS_STORAGE_KEY);
-      console.log('✅ Usuarios eliminados localmente');
-    } catch (error) {
-      console.error('❌ Error clearing users:', error);
-    }
-  }
-
-  // Funciones auxiliares locales
-  private static async getAllUsersLocal(): Promise<StoredUser[]> {
-    try {
-      const usersJson = await AsyncStorage.getItem(USERS_STORAGE_KEY);
-      return usersJson ? JSON.parse(usersJson) : [];
-    } catch (error) {
-      console.error('Error loading local users:', error);
+      console.error('Error obteniendo usuarios:', error);
       return [];
     }
   }
 
-  private static async addUserLocal(user: StoredUser): Promise<void> {
+  // Actualizar usuario
+  static async updateUser(userId: string, updates: Partial<StoredUser>): Promise<void> {
     try {
-      const users = await this.getAllUsersLocal();
-      const existingUserIndex = users.findIndex(u => u.id === user.id);
+      // Encontrar el usuario por userId
+      const usersRef = ref(database, this.basePath);
+      const snapshot = await get(usersRef);
       
-      if (existingUserIndex >= 0) {
-        users[existingUserIndex] = { ...users[existingUserIndex], ...user, lastActive: new Date().toISOString() };
-      } else {
-        users.push(user);
+      if (!snapshot.exists()) {
+        throw new Error('No se encontraron usuarios');
       }
+
+      const usersData = snapshot.val();
+      let firebaseKey: string | null = null;
+
+      Object.keys(usersData).forEach(key => {
+        const user = usersData[key] as StoredUser;
+        if (user.id === userId) {
+          firebaseKey = key;
+        }
+      });
+
+      if (!firebaseKey) {
+        throw new Error(`Usuario no encontrado para actualizar: ${userId}`);
+      }
+
+      // Remover firebaseKey de las actualizaciones ya que no debe guardarse en Firebase
+      const { firebaseKey: _, ...cleanUpdates } = updates;
+
+      // Actualizar el usuario
+      const userRef = ref(database, `${this.basePath}/${firebaseKey}`);
+      const currentUser = usersData[firebaseKey];
+      const updatedUser = { 
+        ...currentUser, 
+        ...cleanUpdates,
+        lastActive: new Date().toISOString() // Siempre actualizar lastActive
+      };
       
-      await AsyncStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-      console.log('💾 Usuario guardado localmente:', user.name);
+      await set(userRef, updatedUser);
+      console.log('Usuario actualizado exitosamente');
     } catch (error) {
-      console.error('Error saving user locally:', error);
+      console.error('Error actualizando usuario:', error);
+      throw error;
+    }
+  }
+
+  // Incrementar puntos del usuario
+  static async addPointsToUser(userId: string, points: number): Promise<void> {
+    try {
+      const user = await this.getUser(userId);
+      await this.updateUser(userId, {
+        points: user.points + points
+      });
+    } catch (error) {
+      console.error('Error agregando puntos:', error);
+      throw error;
+    }
+  }
+
+  // Actualizar racha del usuario
+  static async updateUserStreak(userId: string, streak: number): Promise<void> {
+    try {
+      await this.updateUser(userId, {
+        streak
+      });
+    } catch (error) {
+      console.error('Error actualizando racha:', error);
+      throw error;
     }
   }
 }

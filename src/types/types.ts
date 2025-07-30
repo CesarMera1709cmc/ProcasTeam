@@ -1,12 +1,14 @@
 // Tipos de navegación
 export type RootStackParamList = {
-  Home: undefined;
+  Home: undefined; // o Home: undefined si es tu pantalla inicial
   UserInput: { userType: string };
   Dashboard: { userId: string; userName: string };
   CreateGoal: { userId: string; userName: string };
-  Profile: undefined;
-  Tasks: undefined;
+  Profile: { userId?: string; userName?: string };
   Team: { currentUserId: string };
+  PublicCommitments: { userId?: string; userName?: string };
+  AppBlocker: { userId?: string; userName?: string };
+  DailyChallenge: { userId?: string; userName?: string };
 };
 
 // Tipos de usuario

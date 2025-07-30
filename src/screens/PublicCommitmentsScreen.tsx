@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,29 +11,59 @@ import {
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
 import * as ImagePicker from 'expo-image-picker';
-import { Goal } from '../services/GoalService';
-import { StoredUser } from '../services/UserService';
+import BottomNavigation from '../components/BottomNavigation';
+import { Goal, GoalService } from '../services/GoalService';
+import { StoredUser, UserService } from '../services/UserService';
 
 interface PublicCommitmentsScreenProps {
   navigation: any;
-  currentUser: StoredUser;
-  goals: Goal[];
-  allUsers: StoredUser[];
-  onUploadEvidence: (goalId: string, image: any) => void;
+  route: any;
 }
 
 const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
   navigation,
-  currentUser,
-  goals,
-  allUsers,
-  onUploadEvidence,
+  route,
 }) => {
   const [selectedImage, setSelectedImage] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<StoredUser | null>(null);
+  const [allUsers, setAllUsers] = useState<StoredUser[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Obtener userId de la navegación o fallback
+  const userId = route?.params?.userId || 'user-cesar-1753750573601';
+
+  useEffect(() => {
+    loadData();
+  }, [userId]);
+
+  const loadData = async () => {
+    try {
+      setIsLoading(true);
+
+      // Cargar usuario actual
+      const user = await UserService.getUser(userId);
+      setCurrentUser(user);
+
+      // Cargar todos los usuarios
+      const users = await UserService.getAllUsers();
+      setAllUsers(users);
+
+      // Cargar todas las metas del usuario
+      const userGoals = await GoalService.getUserGoals(userId);
+      setGoals(userGoals);
+
+    } catch (error) {
+      console.error('Error loading data:', error);
+      Alert.alert('Error', 'No se pudieron cargar los datos.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const publicGoals = goals.filter(goal => goal.isPublic);
-  const currentCommitment = publicGoals.find(goal => !goal.isCompleted);
-  const otherUser = allUsers.find(user => user.id !== currentUser.id);
+  const currentCommitment = publicGoals.find(goal => !goal.isCompleted && !goal.isIncomplete);
+  const otherUsers = allUsers.filter(user => user.id !== userId);
 
   const handleSelectImage = async () => {
     try {
@@ -62,17 +92,40 @@ const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
     }
   };
 
-  const handleUploadEvidence = () => {
+  const handleUploadEvidence = async () => {
     if (currentCommitment && selectedImage) {
       Alert.alert(
         '¡Evidencia subida!',
-        'Tu evidencia ha sido registrada exitosamente.',
+        `¿Completaste "${currentCommitment.title}" exitosamente?`,
         [
           {
-            text: 'OK',
-            onPress: () => {
-              onUploadEvidence(currentCommitment.id, selectedImage);
-              setSelectedImage(null);
+            text: 'Cancelar',
+            style: 'cancel'
+          },
+          {
+            text: 'Sí, completado',
+            onPress: async () => {
+              try {
+                // Marcar meta como completada en Firebase
+                await GoalService.completeGoal(currentCommitment.id);
+                
+                // Mostrar éxito y recargar datos
+                Alert.alert(
+                  '¡Excelente! 🏆',
+                  `¡Completaste "${currentCommitment.title}"!\n\nHas ganado +${currentCommitment.points} puntos 🎯`,
+                  [{ 
+                    text: 'Genial!', 
+                    onPress: () => {
+                      setSelectedImage(null);
+                      loadData(); // Recargar datos
+                    }
+                  }]
+                );
+
+              } catch (error) {
+                console.error('Error completing goal:', error);
+                Alert.alert('Error', 'No se pudo completar la meta. Inténtalo de nuevo.');
+              }
             }
           }
         ]
@@ -89,6 +142,26 @@ const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
     });
   };
 
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Cargando compromisos...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Error al cargar usuario</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
@@ -101,6 +174,9 @@ const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
           <Feather name="arrow-left" size={24} color="#2D3748" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Compromisos Públicos</Text>
+        <View style={styles.headerRight}>
+          <Text style={styles.userPoints}>{currentUser.points} pts</Text>
+        </View>
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
@@ -113,23 +189,34 @@ const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
                 <Text style={styles.commitmentText}>
                   📝 "{currentCommitment.title}"
                 </Text>
+                <Text style={styles.commitmentDescription}>
+                  {currentCommitment.description}
+                </Text>
                 <Text style={styles.commitmentDate}>
-                  Fecha límite: {currentCommitment.dueDate ? formatDate(currentCommitment.dueDate) : 'Sin fecha límite'}
+                  Fecha límite: {formatDate(currentCommitment.dueDate)}
+                </Text>
+                <Text style={styles.commitmentPoints}>
+                  Puntos en juego: +{currentCommitment.points} pts
                 </Text>
               </View>
               
-              {/* Other User Bet */}
-              {otherUser && (
-                <View style={styles.betBox}>
-                  <View style={styles.betHeader}>
-                    <View style={styles.userAvatar}>
-                      <Text style={styles.avatarText}>{otherUser.name[0]}</Text>
+              {/* Other Users */}
+              {otherUsers.length > 0 && (
+                <View style={styles.teamSection}>
+                  <Text style={styles.sectionTitle}>Tu Equipo te está observando 👀</Text>
+                  {otherUsers.slice(0, 2).map(user => (
+                    <View key={user.id} style={styles.teammateBox}>
+                      <View style={styles.userAvatar}>
+                        <Text style={styles.avatarText}>{user.name[0]}</Text>
+                      </View>
+                      <View style={styles.teammateInfo}>
+                        <Text style={styles.teammateName}>{user.name}</Text>
+                        <Text style={styles.teammateMessage}>
+                          ¡Está esperando que cumplas tu compromiso! 💪
+                        </Text>
+                      </View>
                     </View>
-                    <View style={styles.betInfo}>
-                      <Text style={styles.betterName}>{otherUser.name} apostó 10 puntos</Text>
-                      <Text style={styles.betDescription}>a que NO lo lograrás</Text>
-                    </View>
-                  </View>
+                  ))}
                 </View>
               )}
 
@@ -139,7 +226,7 @@ const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
                 <View style={styles.uploadBox}>
                   <Feather name="camera" size={32} color="#A0AEC0" />
                   <Text style={styles.uploadText}>
-                    {selectedImage ? 'Imagen seleccionada' : 'Selecciona una foto de evidencia'}
+                    {selectedImage ? 'Imagen seleccionada ✅' : 'Toma una foto como evidencia'}
                   </Text>
                   {selectedImage && (
                     <Image source={{ uri: selectedImage.uri }} style={styles.previewImage} />
@@ -149,7 +236,10 @@ const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
                     onPress={handleSelectImage}
                     activeOpacity={0.7}
                   >
-                    <Text style={styles.selectButtonText}>Seleccionar Archivo</Text>
+                    <Feather name="camera" size={16} color="#4A5568" />
+                    <Text style={styles.selectButtonText}>
+                      {selectedImage ? 'Cambiar Foto' : 'Seleccionar Foto'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
                 <TouchableOpacity
@@ -171,31 +261,64 @@ const PublicCommitmentsScreen: React.FC<PublicCommitmentsScreenProps> = ({
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Sin Compromisos Actuales</Text>
             <Text style={styles.emptyMessage}>
-              No tienes compromisos públicos activos. Crea una meta pública para comenzar.
+              No tienes compromisos públicos activos.{'\n\n'}
+              Crea una meta pública desde el Dashboard para comenzar a construir responsabilidad con tu equipo.
             </Text>
+            <TouchableOpacity
+              style={styles.createGoalButton}
+              onPress={() => navigation.navigate('CreateGoal', { userId, userName: currentUser.name })}
+            >
+              <Feather name="plus" size={16} color="#FFFFFF" />
+              <Text style={styles.createGoalButtonText}>Crear Meta Pública</Text>
+            </TouchableOpacity>
           </View>
         )}
 
         {/* Results */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Resultados Recientes</Text>
+          <Text style={styles.cardTitle}>Historial de Compromisos</Text>
           <View style={styles.resultsList}>
-            {publicGoals.filter(goal => goal.isCompleted).slice(0, 3).map(goal => (
-              <View key={goal.id} style={styles.resultItem}>
-                <Feather name="check" size={16} color="#38A169" />
+            {publicGoals.filter(goal => goal.isCompleted || goal.isIncomplete).slice(0, 5).map(goal => (
+              <View key={goal.id} style={[
+                styles.resultItem,
+                goal.isCompleted ? styles.completedResult : styles.incompleteResult
+              ]}>
+                <Feather 
+                  name={goal.isCompleted ? "check" : "x"} 
+                  size={16} 
+                  color={goal.isCompleted ? "#38A169" : "#E53E3E"} 
+                />
                 <View style={styles.resultContent}>
-                  <Text style={styles.resultTitle}>¡Ganaste!</Text>
+                  <Text style={styles.resultTitle}>
+                    {goal.isCompleted ? '¡Completado!' : 'No completado'}
+                  </Text>
                   <Text style={styles.resultDescription}>{goal.title}</Text>
+                  <Text style={styles.resultDate}>
+                    {formatDate(goal.completedAt || goal.incompleteAt || goal.dueDate)}
+                  </Text>
                 </View>
-                <Text style={styles.resultPoints}>+{goal.points} pts</Text>
+                <Text style={[
+                  styles.resultPoints,
+                  { color: goal.isCompleted ? '#38A169' : '#E53E3E' }
+                ]}>
+                  {goal.isCompleted ? '+' : ''}{goal.isCompleted ? goal.points : 0} pts
+                </Text>
               </View>
             ))}
-            {publicGoals.filter(goal => goal.isCompleted).length === 0 && (
-              <Text style={styles.emptyMessage}>No hay resultados recientes</Text>
+            {publicGoals.filter(goal => goal.isCompleted || goal.isIncomplete).length === 0 && (
+              <Text style={styles.emptyMessage}>No hay historial de compromisos aún</Text>
             )}
           </View>
         </View>
       </ScrollView>
+
+      {/* Bottom Navigation */}
+      <BottomNavigation 
+        navigation={navigation} 
+        currentScreen="PublicCommitments"
+        userId={userId}
+        userName={currentUser?.name}
+      />
     </SafeAreaView>
   );
 };
@@ -204,6 +327,15 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F7FAFC',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#718096',
   },
   header: {
     flexDirection: 'row',
@@ -224,10 +356,19 @@ const styles = StyleSheet.create({
     color: '#2D3748',
     marginLeft: 16,
   },
+  headerRight: {
+    marginLeft: 'auto',
+  },
+  userPoints: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#38A169',
+  },
   scrollView: {
     flex: 1,
     paddingHorizontal: 16,
     paddingTop: 16,
+    paddingBottom: 80,
   },
   card: {
     backgroundColor: '#FFFFFF',
@@ -263,26 +404,44 @@ const styles = StyleSheet.create({
     color: '#2D3748',
     marginBottom: 8,
   },
+  commitmentDescription: {
+    fontSize: 14,
+    color: '#4A5568',
+    marginBottom: 8,
+  },
   commitmentDate: {
     fontSize: 14,
     color: '#718096',
   },
-  betBox: {
-    backgroundColor: '#FED7D7',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: '#E53E3E',
+  commitmentPoints: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#38A169',
+    marginTop: 4,
   },
-  betHeader: {
+  teamSection: {
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2D3748',
+    marginBottom: 12,
+  },
+  teammateBox: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#F0FFF4',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#38A169',
   },
   userAvatar: {
     width: 40,
     height: 40,
-    backgroundColor: '#E53E3E',
+    backgroundColor: '#38A169',
     borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
@@ -293,26 +452,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-  betInfo: {
+  teammateInfo: {
     flex: 1,
   },
-  betterName: {
-    fontSize: 16,
+  teammateName: {
+    fontSize: 14,
     fontWeight: '600',
-    color: '#C53030',
+    color: '#2D3748',
     marginBottom: 2,
   },
-  betDescription: {
-    fontSize: 14,
-    color: '#E53E3E',
+  teammateMessage: {
+    fontSize: 12,
+    color: '#38A169',
   },
   evidenceSection: {
     gap: 16,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#2D3748',
   },
   uploadBox: {
     borderWidth: 2,
@@ -337,9 +491,12 @@ const styles = StyleSheet.create({
   },
   selectButton: {
     backgroundColor: '#E2E8F0',
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 8,
+    gap: 8,
   },
   selectButtonText: {
     color: '#4A5568',
@@ -363,6 +520,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  createGoalButton: {
+    backgroundColor: '#4299E1',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 8,
+    gap: 8,
+    marginTop: 16,
+  },
+  createGoalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
   resultsList: {
     gap: 12,
   },
@@ -370,11 +542,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
-    backgroundColor: '#F0FFF4',
     borderRadius: 12,
     gap: 12,
     borderLeftWidth: 4,
+  },
+  completedResult: {
+    backgroundColor: '#F0FFF4',
     borderLeftColor: '#38A169',
+  },
+  incompleteResult: {
+    backgroundColor: '#FED7D7',
+    borderLeftColor: '#E53E3E',
   },
   resultContent: {
     flex: 1,
@@ -388,6 +566,11 @@ const styles = StyleSheet.create({
   resultDescription: {
     fontSize: 14,
     color: '#718096',
+  },
+  resultDate: {
+    fontSize: 12,
+    color: '#A0AEC0',
+    marginTop: 2,
   },
   resultPoints: {
     fontSize: 16,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -26,15 +26,6 @@ const UserInputScreen: React.FC<UserInputScreenProps> = ({ navigation, route }) 
   const { userType } = route.params;
   const [userName, setUserName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [existingUsers, setExistingUsers] = useState<StoredUser[]>([]);
-
-  useEffect(() => {
-    const loadExistingUsers = async () => {
-      const users = await UserService.getAllUsers();
-      setExistingUsers(users);
-    };
-    loadExistingUsers();
-  }, []);
 
   const handleContinue = async () => {
     if (userName.trim() === '') {
@@ -54,15 +45,16 @@ const UserInputScreen: React.FC<UserInputScreenProps> = ({ navigation, route }) 
         name: userName.trim(),
         userType,
         points: 0,
+        streak: 0,
         joinedAt: new Date().toISOString(),
         lastActive: new Date().toISOString(),
       };
 
-      // Guardar el usuario en AsyncStorage
+      // Guardar el usuario en Firebase
       await UserService.addUser(newUser);
 
       // Navegar al Dashboard
-      navigation.navigate('Dashboard', { 
+      navigation.replace('Dashboard', { 
         userId, 
         userName: userName.trim() 
       });
@@ -80,10 +72,10 @@ const UserInputScreen: React.FC<UserInputScreenProps> = ({ navigation, route }) 
         <View style={styles.headerContainer}>
           <Text style={styles.title}>¡Perfecto!</Text>
           <Text style={styles.subtitle}>
-            Elegiste ser {userType === 'user1' ? 'Usuario 1' : 'Usuario 2'}
+            Vamos a crear tu cuenta
           </Text>
           <Text style={styles.description}>
-            Ahora cuéntanos, ¿cómo te llamas?
+            ¿Cómo te llamas?
           </Text>
         </View>
 
@@ -99,6 +91,7 @@ const UserInputScreen: React.FC<UserInputScreenProps> = ({ navigation, route }) 
             autoCorrect={false}
             maxLength={30}
             editable={!isLoading}
+            autoFocus={true}
           />
         </View>
 
@@ -119,7 +112,7 @@ const UserInputScreen: React.FC<UserInputScreenProps> = ({ navigation, route }) 
                 styles.continueButtonText,
                 userName.trim() === '' && styles.continueButtonTextDisabled
               ]}>
-                Continuar
+                Crear Cuenta
               </Text>
             )}
           </TouchableOpacity>
@@ -133,28 +126,6 @@ const UserInputScreen: React.FC<UserInputScreenProps> = ({ navigation, route }) 
             <Text style={styles.backButtonText}>Volver</Text>
           </TouchableOpacity>
         </View>
-
-        {/* Mostrar usuarios existentes */}
-        {existingUsers.length > 0 && (
-          <View style={styles.existingUsersContainer}>
-            <Text style={styles.existingUsersTitle}>Usuarios existentes:</Text>
-            {existingUsers.map(user => (
-              <TouchableOpacity
-                key={user.id}
-                style={styles.existingUserItem}
-                onPress={() => {
-                  navigation.navigate('Dashboard', { 
-                    userId: user.id, 
-                    userName: user.name 
-                  });
-                }}
-              >
-                <Text style={styles.existingUserName}>{user.name}</Text>
-                <Text style={styles.existingUserPoints}>{user.points} pts</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
       </View>
     </SafeAreaView>
   );
@@ -254,40 +225,6 @@ const styles = StyleSheet.create({
     color: '#718096',
     fontSize: 16,
     fontWeight: '600',
-  },
-  existingUsersContainer: {
-    width: '100%',
-    marginTop: 32,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
-  },
-  existingUsersTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#2D3748',
-    marginBottom: 16,
-  },
-  existingUserItem: {
-    backgroundColor: '#F7FAFC',
-    borderRadius: 12,
-    padding: 16,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  existingUserName: {
-    fontSize: 16,
-    color: '#2D3748',
-    fontWeight: '500',
-  },
-  existingUserPoints: {
-    fontSize: 16,
-    color: '#718096',
-    fontWeight: '500',
   },
 });
 
