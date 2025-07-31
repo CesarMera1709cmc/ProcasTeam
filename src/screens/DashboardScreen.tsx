@@ -491,7 +491,7 @@ const DashboardScreen: React.FC = () => {
             <Feather name="users" size={20} color="#4299E1" />
           </TouchableOpacity>
           <View style={styles.pointsContainer}>
-            <Text style={styles.points}>{currentUserPoints}</Text>
+            <Text style={styles.points}>{currentUser?.points ?? 0}</Text>
             <Text style={styles.pointsLabel}>puntos</Text>
           </View>
         </View>
@@ -550,12 +550,11 @@ const DashboardScreen: React.FC = () => {
                   ) : (
                     <View style={styles.emptyCategory}>
                       <Text style={styles.emptyCategoryText}>
-                        {category.id === 'today' ? 
-                          '¡Perfecto! Tienes el día libre 😊' :
-                          category.id === 'tomorrow' ?
-                          'Planifica metas para mañana' :
-                          'No hay metas programadas'
-                        }
+                        {category.id === 'today'
+                          ? '¡Perfecto! Tienes el día libre 😊'
+                          : category.id === 'tomorrow'
+                          ? 'Planifica metas para mañana'
+                          : 'No hay metas programadas'}
                       </Text>
                     </View>
                   )}
