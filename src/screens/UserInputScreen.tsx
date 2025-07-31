@@ -13,6 +13,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../types/types';
 import { UserService, StoredUser } from '../services/UserService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type UserInputScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'UserInput'>;
 type UserInputScreenRouteProp = RouteProp<RootStackParamList, 'UserInput'>;
@@ -23,13 +24,24 @@ interface UserInputScreenProps {
 }
 
 const UserInputScreen: React.FC<UserInputScreenProps> = ({ navigation, route }) => {
-  const { userType } = route.params;
+  const { userType, existingUsers } = route.params;
   const [userName, setUserName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   const handleContinue = async () => {
     if (userName.trim() === '') {
       Alert.alert('Error', 'Por favor ingresa tu nombre');
+      return;
+    }
+
+    // Check if user already exists (case-insensitive)
+    const normalizedUserName = userName.trim().toLowerCase();
+    if (existingUsers && existingUsers.includes(normalizedUserName)) {
+      Alert.alert(
+        'Usuario Existente', 
+        `Ya existe un usuario con el nombre "${userName.trim()}". Por favor elige un nombre diferente o selecciona el usuario existente desde la pantalla anterior.`,
+        [{ text: 'Entendido', style: 'default' }]
+      );
       return;
     }
 
@@ -52,6 +64,9 @@ const UserInputScreen: React.FC<UserInputScreenProps> = ({ navigation, route }) 
 
       // Guardar el usuario en Firebase
       await UserService.addUser(newUser);
+
+      // Guardar el ID del nuevo usuario en AsyncStorage para la sesión actual
+      await AsyncStorage.setItem('currentUserId', userId);
 
       // Navegar al Dashboard
       navigation.replace('Dashboard', { 

@@ -40,14 +40,15 @@ export class UserService {
   }
 
   // Obtener usuario por ID
-  static async getUser(userId: string): Promise<StoredUser> {
+  static async getUser(userId: string): Promise<StoredUser | null> {
     try {
       this.validateFirebaseConnection();
       const usersRef = ref(database, this.basePath);
       const snapshot = await get(usersRef);
       
       if (!snapshot.exists()) {
-        throw new Error(`Usuario no encontrado: ${userId}`);
+        console.warn(`No se encontraron usuarios en la base de datos.`);
+        return null;
       }
 
       const usersData = snapshot.val();
@@ -61,13 +62,14 @@ export class UserService {
       });
 
       if (!foundUser) {
-        throw new Error(`Usuario no encontrado: ${userId}`);
+        console.warn(`Usuario no encontrado: ${userId}`);
+        return null;
       }
       
       return foundUser;
     } catch (error) {
       console.error('Error obteniendo usuario:', error);
-      throw new Error(`Error al obtener usuario: ${error.message}`);
+      return null;
     }
   }
 

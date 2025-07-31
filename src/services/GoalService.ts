@@ -1,4 +1,11 @@
 import { database, ref, set, onValue, off, get } from './FirebaseService';
+import { UserService } from './UserService';
+
+export interface Bet {
+  userId: string;
+  betType: 'for' | 'against';
+  amount: number;
+}
 
 export interface Goal {
   id: string;
@@ -16,6 +23,8 @@ export interface Goal {
   completedAt?: string;
   incompleteAt?: string;
   firebaseKey?: string;
+  evidenceUrl?: string | null;
+  bets?: Bet[];
 }
 
 export class GoalService {
@@ -88,6 +97,48 @@ export class GoalService {
     }
   }
 
+  // Marcar meta pública como completada (con bonus y distribución de apuestas)
+  static async completePublicGoal(goalId: string, evidenceUrl: string): Promise<void> {
+    try {
+      console.log(`🏆 Completando meta pública: ${goalId}`);
+      const goalRef = ref(database, `goals/${goalId}`);
+      const snapshot = await get(goalRef);
+      
+      if (snapshot.exists()) {
+        const goal = snapshot.val() as Goal;
+        const updatedGoal = {
+          ...goal,
+          isCompleted: true,
+          completedAt: new Date().toISOString(),
+          evidenceUrl: evidenceUrl,
+          lastUpdated: new Date().toISOString()
+        };
+        
+        await set(goalRef, updatedGoal);
+
+        // Otorgar puntos al creador (con bonus del 50%)
+        const bonusPoints = Math.ceil(goal.points * 0.5);
+        const totalPointsForCreator = goal.points + bonusPoints;
+        await this.updateUserPoints(goal.userId, totalPointsForCreator);
+        console.log(`✅ Meta pública completada. Creador gana ${totalPointsForCreator} puntos.`);
+
+        // TODO: Distribuir puntos de apuestas
+        if (goal.bets) {
+          for (const bet of goal.bets) {
+            if (bet.betType === 'for') {
+              // Ganaron, devuelves lo apostado x2
+              await this.updateUserPoints(bet.userId, bet.amount * 2);
+            }
+            // Si apostaron 'against', ya perdieron sus puntos al apostar.
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error completing public goal:', error);
+      throw error;
+    }
+  }
+
   // Marcar meta como completada y actualizar puntos del usuario
   static async completeGoal(goalId: string): Promise<void> {
     try {
@@ -114,7 +165,40 @@ export class GoalService {
     }
   }
 
-  // Marcar meta como no completada (para prototipo)
+  // Añadir una apuesta a una meta
+  static async addBetToGoal(goalId: string, bet: Bet): Promise<void> {
+    try {
+      const goalRef = ref(database, `goals/${goalId}`);
+      const goalSnapshot = await get(goalRef);
+
+      if (!goalSnapshot.exists()) {
+        throw new Error('La meta no existe.');
+      }
+
+      const goal = goalSnapshot.val() as Goal;
+
+      // Validar que el usuario tenga suficientes puntos
+      const user = await UserService.getUser(bet.userId);
+      if (!user || user.points < bet.amount) {
+        throw new Error('No tienes suficientes puntos para apostar.');
+      }
+
+      // Deducir puntos del apostador
+      await this.updateUserPoints(bet.userId, -bet.amount);
+
+      // Añadir la apuesta a la meta
+      const bets = goal.bets || [];
+      bets.push(bet);
+      await set(ref(database, `goals/${goalId}/bets`), bets);
+
+      console.log(`💸 Apuesta de ${bet.amount} pts registrada para ${bet.userId} en la meta ${goalId}`);
+    } catch (error) {
+      console.error('❌ Error adding bet to goal:', error);
+      throw error;
+    }
+  }
+
+  // Marcar meta como no completada
   static async markGoalAsIncomplete(goalId: string): Promise<void> {
     try {
       console.log(`📉 Marcando meta como no completada: ${goalId}`);
@@ -123,6 +207,13 @@ export class GoalService {
       
       if (snapshot.exists()) {
         const goal = snapshot.val() as Goal;
+
+        // Si es una meta pública, tiene una lógica de fallo diferente
+        if (goal.isPublic) {
+          await this.failPublicGoal(goalId);
+          return;
+        }
+
         const updatedGoal = {
           ...goal,
           isIncomplete: true,
@@ -140,16 +231,71 @@ export class GoalService {
     }
   }
 
+  // Marcar meta pública como fallida y distribuir puntos
+  static async failPublicGoal(goalId: string): Promise<void> {
+    try {
+      console.log(`💥 Fallando meta pública: ${goalId}`);
+      const goalRef = ref(database, `goals/${goalId}`);
+      const snapshot = await get(goalRef);
+
+      if (snapshot.exists()) {
+        const goal = snapshot.val() as Goal;
+        const updatedGoal = {
+          ...goal,
+          isIncomplete: true,
+          incompleteAt: new Date().toISOString(),
+          lastUpdated: new Date().toISOString()
+        };
+        
+        await set(goalRef, updatedGoal);
+
+        // Deducir puntos del creador
+        await this.updateUserPoints(goal.userId, -goal.points);
+        console.log(`💥 Meta pública fallida. Creador pierde ${goal.points} puntos.`);
+
+        // Distribuir puntos de apuestas
+        if (goal.bets) {
+          for (const bet of goal.bets) {
+            if (bet.betType === 'against') {
+              // Ganaron, devuelves lo apostado x2
+              await this.updateUserPoints(bet.userId, bet.amount * 2);
+            }
+            // Si apostaron 'for', ya perdieron sus puntos al apostar.
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error failing public goal:', error);
+      throw error;
+    }
+  }
+
   // Actualizar puntos del usuario (helper method)
   private static async updateUserPoints(userId: string, pointsToAdd: number): Promise<void> {
     try {
-      console.log(`🎯 Agregando ${pointsToAdd} puntos al usuario ${userId}`);
-      const userRef = ref(database, `users/${userId}/points`);
-      const snapshot = await get(userRef);
-      const currentPoints = snapshot.exists() ? snapshot.val() : 0;
-      await set(userRef, currentPoints + pointsToAdd);
+      console.log(`🎯 Buscando usuario ${userId} para agregar ${pointsToAdd} puntos`);
+      
+      // Buscar el usuario usando UserService que maneja correctamente los Firebase keys
+      const user = await UserService.getUser(userId);
+      
+      if (!user) {
+        console.error(`❌ Usuario no encontrado: ${userId}`);
+        return;
+      }
+      
+      const currentPoints = user.points || 0;
+      const newPoints = Math.max(0, currentPoints + pointsToAdd);
+      
+      // Usar UserService para actualizar, que maneja correctamente los Firebase keys
+      await UserService.updateUser(userId, {
+        points: newPoints,
+        lastActive: new Date().toISOString()
+      });
+      
+      console.log(`✅ Puntos actualizados para ${user.name}: ${currentPoints} → ${newPoints}`);
     } catch (error) {
       console.error('❌ Error updating user points:', error);
+      throw error;
     }
   }
 
@@ -157,10 +303,10 @@ export class GoalService {
   private static async updateUserIncompleteStats(userId: string): Promise<void> {
     try {
       console.log(`📊 Actualizando estadísticas de metas no completadas para usuario ${userId}`);
-      const userStatsRef = ref(database, `users/${userId}/incompleteGoals`);
-      const snapshot = await get(userStatsRef);
-      const currentIncomplete = snapshot.exists() ? snapshot.val() : 0;
-      await set(userStatsRef, currentIncomplete + 1);
+      
+      // Usar UserService para manejar la actualización correctamente
+      await UserService.incrementIncompleteGoals(userId);
+      
     } catch (error) {
       console.error('❌ Error updating incomplete stats:', error);
     }
@@ -176,6 +322,25 @@ export class GoalService {
         const goalsData = snapshot.val();
         const goals: Goal[] = Object.values(goalsData);
         callback(goals);
+      } else {
+        callback([]);
+      }
+    });
+
+    return () => off(goalsRef, 'value', unsubscribe);
+  }
+
+  // Escuchar cambios solo en metas públicas
+  static listenToPublicGoals(callback: (goals: Goal[]) => void): () => void {
+    console.log('👂 Iniciando listener de metas públicas...');
+    const goalsRef = ref(database, 'goals');
+    
+    const unsubscribe = onValue(goalsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const goalsData = snapshot.val();
+        const allGoals: Goal[] = Object.values(goalsData);
+        const publicGoals = allGoals.filter(g => g.isPublic);
+        callback(publicGoals);
       } else {
         callback([]);
       }

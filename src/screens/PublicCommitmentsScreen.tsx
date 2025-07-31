@@ -11,20 +11,23 @@ import {
 } from 'react-native';
 import Feather from 'react-native-vector-icons/Feather';
 import * as ImagePicker from 'expo-image-picker';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import type { NavigationProp } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Goal, GoalService } from '../services/GoalService';
 import { StoredUser, UserService } from '../services/UserService';
 import { RootStackParamList } from '../types/types';
+import { BettingModal } from '../components/BettingModal';
 
 const PublicCommitmentsScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const [selectedImage, setSelectedImage] = useState<any>(null);
   const [currentUser, setCurrentUser] = useState<StoredUser | null>(null);
   const [allUsers, setAllUsers] = useState<StoredUser[]>([]);
-  const [goals, setGoals] = useState<Goal[]>([]);
+  const [publicGoals, setPublicGoals] = useState<Goal[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isBetModalVisible, setIsBetModalVisible] = useState(false);
+  const [selectedGoalToBet, setSelectedGoalToBet] = useState<Goal | null>(null);
 
   // Obtener userId desde AsyncStorage
   const getUserId = async () => {
@@ -42,15 +45,15 @@ const PublicCommitmentsScreen: React.FC = () => {
       setIsLoading(true);
       const userId = await getUserId();
 
-      const [user, users, userGoals] = await Promise.all([
+      const [user, users, allGoals] = await Promise.all([
         UserService.getUser(userId),
         UserService.getAllUsers(),
-        GoalService.getUserGoals(userId)
+        GoalService.getPublicGoals()
       ]);
 
       setCurrentUser(user);
       setAllUsers(users);
-      setGoals(userGoals);
+      setPublicGoals(allGoals);
     } catch (error) {
       console.error('Error loading data:', error);
       Alert.alert('Error', 'No se pudieron cargar los datos.');
@@ -59,60 +62,74 @@ const PublicCommitmentsScreen: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    loadData();
+  useFocusEffect(
+    React.useCallback(() => {
+      loadData();
 
-    // Escuchar cambios en tiempo real
-    const unsubscribeUsers = UserService.listenToUsers(setAllUsers);
-    const unsubscribeGoals = GoalService.listenToGoals((allGoals) => {
-      getUserId().then(userId => {
-        const userGoals = allGoals.filter(goal => goal.userId === userId);
-        setGoals(userGoals);
-      });
-    });
+      // Escuchar cambios en tiempo real
+      const unsubscribeUsers = UserService.listenToUsers(setAllUsers);
+      const unsubscribeGoals = GoalService.listenToPublicGoals(setPublicGoals);
 
-    return () => {
-      unsubscribeUsers();
-      unsubscribeGoals();
-    };
-  }, []);
+      return () => {
+        unsubscribeUsers();
+        unsubscribeGoals();
+      };
+    }, [])
+  );
 
-  const publicGoals = goals.filter(goal => goal.isPublic);
-  const currentCommitment = publicGoals.find(goal => !goal.isCompleted && !goal.isIncomplete);
-  const otherUsers = allUsers.filter(user => user.id !== currentUser?.id);
+  const myCurrentCommitment = publicGoals.find(
+    goal => goal.userId === currentUser?.id && !goal.isCompleted && !goal.isIncomplete
+  );
+  
+  const otherUsersCommitments = publicGoals.filter(
+    goal => goal.userId !== currentUser?.id && !goal.isCompleted && !goal.isIncomplete
+  );
+
+  const myPastCommitments = publicGoals.filter(
+    goal => goal.userId === currentUser?.id && (goal.isCompleted || goal.isIncomplete)
+  );
 
   const handleSelectImage = async () => {
     try {
-      // Pedir permisos
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      
-      if (status !== 'granted') {
-        Alert.alert('Permisos necesarios', 'Se necesitan permisos para acceder a la galería.');
+      // Solicitar permisos para acceder a la cámara.
+      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+
+      if (permissionResult.granted === false) {
+        Alert.alert(
+          "Permiso denegado",
+          "Necesitas conceder permisos a la cámara para tomar una foto."
+        );
         return;
       }
 
-      // Abrir galería
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      // Abrir la cámara del dispositivo.
+      const cameraResult = await ImagePicker.launchCameraAsync({
         allowsEditing: true,
         aspect: [4, 3],
-        quality: 0.8,
+        quality: 0.5, // Calidad reducida para pruebas
       });
 
-      if (!result.canceled && result.assets && result.assets[0]) {
-        setSelectedImage(result.assets[0]);
+      // Si el usuario no cancela la cámara (es decir, si toma una foto).
+      if (!cameraResult.canceled) {
+        // En lugar de procesar la imagen, mostramos una alerta.
+        // Esto evita que la imagen se seleccione y que el botón de "subir" se active.
+        Alert.alert(
+          "Función no disponible",
+          "La subida de evidencia fotográfica está en desarrollo. ¡Pronto estará lista!"
+        );
+        // No hacemos nada con cameraResult.assets[0] para evitar errores.
       }
     } catch (error) {
-      console.error('Error selecting image:', error);
-      Alert.alert('Error', 'No se pudo seleccionar la imagen.');
+      console.error("Error al abrir la cámara:", error);
+      Alert.alert("Error", "Ocurrió un problema al intentar abrir la cámara.");
     }
   };
 
   const handleUploadEvidence = async () => {
-    if (currentCommitment && selectedImage) {
+    if (myCurrentCommitment) {
       Alert.alert(
-        '¡Evidencia subida!',
-        `¿Completaste "${currentCommitment.title}" exitosamente?`,
+        '¡Completar Meta!',
+        `¿Completaste "${myCurrentCommitment.title}" exitosamente?`,
         [
           {
             text: 'Cancelar',
@@ -122,13 +139,17 @@ const PublicCommitmentsScreen: React.FC = () => {
             text: 'Sí, completado',
             onPress: async () => {
               try {
+                // Si hay imagen seleccionada, usar una URL de ejemplo
+                // Si no hay imagen, pasar null o una cadena vacía
+                const evidenceUrl = selectedImage ? 'https://example.com/evidence.jpg' : '';
+
                 // Marcar meta como completada en Firebase
-                await GoalService.completeGoal(currentCommitment.id);
+                await GoalService.completePublicGoal(myCurrentCommitment.id, evidenceUrl);
                 
                 // Mostrar éxito y recargar datos
                 Alert.alert(
                   '¡Excelente! 🏆',
-                  `¡Completaste "${currentCommitment.title}"!\n\nHas ganado +${currentCommitment.points} puntos 🎯`,
+                  `¡Completaste "${myCurrentCommitment.title}"!\n\nHas ganado +${myCurrentCommitment.points} puntos (y un bonus por ser público) 🎯`,
                   [{ 
                     text: 'Genial!', 
                     onPress: () => {
@@ -156,6 +177,15 @@ const PublicCommitmentsScreen: React.FC = () => {
       hour: '2-digit',
       minute: '2-digit',
     });
+  };
+
+  const getUserForGoal = (userId: string) => {
+    return allUsers.find(u => u.id === userId);
+  };
+
+  const handleBetPlaced = () => {
+    // Recargar los datos para reflejar el cambio en los puntos del usuario y las apuestas de la meta
+    loadData();
   };
 
   if (isLoading) {
@@ -189,31 +219,31 @@ const PublicCommitmentsScreen: React.FC = () => {
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {currentCommitment ? (
+        {myCurrentCommitment ? (
           <>
             {/* Current Commitment */}
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Tu Compromiso Actual</Text>
               <View style={styles.commitmentBox}>
                 <Text style={styles.commitmentText}>
-                  📝 "{currentCommitment.title}"
+                  📝 "{myCurrentCommitment.title}"
                 </Text>
                 <Text style={styles.commitmentDescription}>
-                  {currentCommitment.description}
+                  {myCurrentCommitment.description}
                 </Text>
                 <Text style={styles.commitmentDate}>
-                  Fecha límite: {formatDate(currentCommitment.dueDate)}
+                  Fecha límite: {formatDate(myCurrentCommitment.dueDate)}
                 </Text>
                 <Text style={styles.commitmentPoints}>
-                  Puntos en juego: +{currentCommitment.points} pts
+                  Puntos en juego: +{myCurrentCommitment.points} pts (+Bonus)
                 </Text>
               </View>
               
               {/* Other Users */}
-              {otherUsers.length > 0 && (
+              {allUsers.filter(u => u.id !== currentUser?.id).length > 0 && (
                 <View style={styles.teamSection}>
                   <Text style={styles.sectionTitle}>Tu Equipo te está observando 👀</Text>
-                  {otherUsers.slice(0, 2).map(user => (
+                  {allUsers.filter(u => u.id !== currentUser?.id).slice(0, 2).map(user => (
                     <View key={user.id} style={styles.teammateBox}>
                       <View style={styles.userAvatar}>
                         <Text style={styles.avatarText}>{user.name[0]}</Text>
@@ -231,11 +261,11 @@ const PublicCommitmentsScreen: React.FC = () => {
 
               {/* Evidence Upload */}
               <View style={styles.evidenceSection}>
-                <Text style={styles.sectionTitle}>Subir Evidencia</Text>
+                <Text style={styles.sectionTitle}>Subir Evidencia (Opcional)</Text>
                 <View style={styles.uploadBox}>
                   <Feather name="camera" size={32} color="#A0AEC0" />
                   <Text style={styles.uploadText}>
-                    {selectedImage ? 'Imagen seleccionada ✅' : 'Toma una foto como evidencia'}
+                    {selectedImage ? 'Imagen seleccionada ✅' : 'Toma una foto como evidencia (opcional)'}
                   </Text>
                   {selectedImage && (
                     <Image source={{ uri: selectedImage.uri }} style={styles.previewImage} />
@@ -252,12 +282,8 @@ const PublicCommitmentsScreen: React.FC = () => {
                   </TouchableOpacity>
                 </View>
                 <TouchableOpacity
-                  style={[
-                    styles.uploadButton,
-                    (!selectedImage) && styles.uploadButtonDisabled
-                  ]}
+                  style={styles.uploadButton}
                   onPress={handleUploadEvidence}
-                  disabled={!selectedImage}
                   activeOpacity={0.8}
                 >
                   <Feather name="check" size={16} color="#FFFFFF" />
@@ -286,11 +312,52 @@ const PublicCommitmentsScreen: React.FC = () => {
           </View>
         )}
 
+        {/* Other Users' Commitments */}
+        {otherUsersCommitments.length > 0 && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Compromisos de tu Equipo</Text>
+            {otherUsersCommitments.map(goal => {
+              const user = getUserForGoal(goal.userId);
+              if (!user) return null;
+
+              return (
+                <View key={goal.id} style={styles.otherCommitmentCard}>
+                  <View style={styles.otherCommitmentCard}>
+                    <View style={styles.userAvatar}>
+                      <Text style={styles.avatarText}>{user.name[0]}</Text>
+                    </View>
+                    <View>
+                      <Text style={styles.teammateName}>{user.name}</Text>
+                      <Text style={styles.commitmentDate}>
+                        Límite: {formatDate(goal.dueDate)}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.commitmentText}>"{goal.title}"</Text>
+                  <Text style={styles.commitmentPoints}>
+                    Recompensa: {goal.points} pts
+                  </Text>
+                  <TouchableOpacity 
+                    style={styles.betButton}
+                    onPress={() => {
+                      setSelectedGoalToBet(goal);
+                      setIsBetModalVisible(true);
+                    }}
+                  >
+                    <Feather name="target" size={16} color="#FFFFFF" />
+                    <Text style={styles.betButtonText}>Apostar Puntos</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
         {/* Results */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Historial de Compromisos</Text>
           <View style={styles.resultsList}>
-            {publicGoals.filter(goal => goal.isCompleted || goal.isIncomplete).slice(0, 5).map(goal => (
+            {myPastCommitments.slice(0, 5).map(goal => (
               <View key={goal.id} style={[
                 styles.resultItem,
                 goal.isCompleted ? styles.completedResult : styles.incompleteResult
@@ -313,16 +380,24 @@ const PublicCommitmentsScreen: React.FC = () => {
                   styles.resultPoints,
                   { color: goal.isCompleted ? '#38A169' : '#E53E3E' }
                 ]}>
-                  {goal.isCompleted ? '+' : ''}{goal.isCompleted ? goal.points : 0} pts
+                  {goal.isCompleted ? '+' : '-'}{goal.points} pts
                 </Text>
               </View>
             ))}
-            {publicGoals.filter(goal => goal.isCompleted || goal.isIncomplete).length === 0 && (
+            {myPastCommitments.length === 0 && (
               <Text style={styles.emptyMessage}>No hay historial de compromisos aún</Text>
             )}
           </View>
         </View>
       </ScrollView>
+
+      <BettingModal
+        visible={isBetModalVisible}
+        onClose={() => setIsBetModalVisible(false)}
+        onBetPlaced={handleBetPlaced}
+        goal={selectedGoalToBet}
+        currentUser={currentUser}
+      />
     </SafeAreaView>
   );
 };
@@ -422,6 +497,26 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#38A169',
     marginTop: 4,
+  },
+  otherCommitmentCard: {
+    backgroundColor: '#F7FAFC',
+    padding: 16,
+    gap: 12,
+  },
+  betButton: {
+    backgroundColor: '#ED8936',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 8,
+    gap: 8,
+    marginTop: 12,
+  },
+  betButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
   teamSection: {
     marginBottom: 16,

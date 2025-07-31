@@ -21,13 +21,32 @@ const DashboardScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const [currentUser, setCurrentUser] = useState<StoredUser | null>(null);
   const [allUsers, setAllUsers] = useState<StoredUser[]>([]);
-  const [userGoals, setUserGoals] = useState<Goal[]>([]);
+  const [allGoals, setAllGoals] = useState<Goal[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const goalsCarouselRef = useRef<ScrollView>(null);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<{ title: string; goals: Goal[]; color: string } | null>(null);
   const [goalDetailModalVisible, setGoalDetailModalVisible] = useState(false);
   const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
+  const [dismissedNotificationIds, setDismissedNotificationIds] = useState<string[]>([]);
+
+  // Derivar listas de metas desde allGoals
+  const userGoals = allGoals.filter(goal => goal.userId === currentUser?.id);
+  const publicGoals = allGoals.filter(goal => goal.isPublic);
+
+  // Calcular puntos en tiempo real basado en metas completadas
+  const completedGoals = userGoals.filter(goal => goal.isCompleted);
+  const currentUserPoints = completedGoals.reduce((sum, goal) => sum + goal.points, 0);
+
+  const handleViewMore = (category: { title: string; goals: Goal[]; color: string }) => {
+    setSelectedCategory(category);
+    setIsModalVisible(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalVisible(false);
+    setSelectedCategory(null);
+  };
 
   // Obtener userId desde AsyncStorage
   const getUserId = async () => {
@@ -48,15 +67,15 @@ const DashboardScreen: React.FC = () => {
       const [user, users, goals] = await Promise.all([
         UserService.getUser(userId),
         UserService.getAllUsers(),
-        GoalService.getUserGoals(userId)
+        GoalService.getAllGoals(),
       ]);
 
       setCurrentUser(user);
       const sortedUsers = users.sort((a, b) => b.points - a.points);
       setAllUsers(sortedUsers);
-      setUserGoals(goals);
+      setAllGoals(goals);
       
-      console.log('📋 Dashboard cargado para:', user.name);
+      console.log('📋 Dashboard cargado para:', user?.name);
     } catch (error) {
       console.error('Error loading user data:', error);
     } finally {
@@ -71,23 +90,35 @@ const DashboardScreen: React.FC = () => {
 
       // Escuchar cambios en tiempo real
       const unsubscribeUsers = UserService.listenToUsers((users) => {
-        const sortedUsers = users.sort((a, b) => b.points - a.points);
+        // Filtrar usuarios duplicados - mantener solo los que tienen ID de Firebase (empiezan con -)
+        // Si hay usuarios duplicados por nombre, preferir el que tiene ID generado por Firebase
+        const uniqueUsers = users.reduce((acc, user) => {
+          const existingUser = acc.find(u => u.name.toLowerCase() === user.name.toLowerCase());
+          
+          if (!existingUser) {
+            // No existe, agregar este usuario
+            acc.push(user);
+          } else {
+            // Ya existe un usuario con este nombre
+            // Preferir el que tiene ID generado por Firebase (empieza con -)
+            if (user.id.startsWith('-') && !existingUser.id.startsWith('-')) {
+              // El nuevo usuario tiene ID de Firebase, reemplazar el anterior
+              const index = acc.findIndex(u => u.name.toLowerCase() === user.name.toLowerCase());
+              acc[index] = user;
+            }
+            // Si ambos tienen ID de Firebase o ambos tienen ID personalizado, mantener el existente
+          }
+          
+          return acc;
+        }, [] as StoredUser[]);
+        
+        const sortedUsers = uniqueUsers.sort((a, b) => b.points - a.points);
         setAllUsers(sortedUsers);
         
-        getUserId().then(userId => {
-          const updatedCurrentUser = users.find(u => u.id === userId);
-          if (updatedCurrentUser) {
-            setCurrentUser(updatedCurrentUser);
-          }
-        });
+        console.log(`👥 Usuarios únicos: ${uniqueUsers.length} (filtrados de ${users.length} total)`);
       });
 
-      const unsubscribeGoals = GoalService.listenToGoals((allGoals) => {
-        getUserId().then(userId => {
-          const userGoalsFiltered = allGoals.filter(goal => goal.userId === userId);
-          setUserGoals(userGoalsFiltered);
-        });
-      });
+      const unsubscribeGoals = GoalService.listenToGoals(setAllGoals);
 
       return () => {
         unsubscribeUsers();
@@ -194,22 +225,62 @@ const DashboardScreen: React.FC = () => {
     }
   }, [goalCategories, isLoading]);
 
-  const completedGoals = userGoals.filter(goal => goal.isCompleted);
-  const totalPoints = completedGoals.reduce((sum, goal) => sum + goal.points, 0);
   const failedGoals = userGoals.filter(goal => !goal.isCompleted);
   const lostPoints = failedGoals.reduce((sum, goal) => sum + goal.points, 0);
 
-  const notifications = [
+  const commitmentNotifications = publicGoals
+    .filter(goal => goal.userId !== currentUser?.id && !goal.isCompleted && !goal.isIncomplete)
+    .map(goal => {
+      const goalUser = allUsers.find(u => u.id === goal.userId);
+      return {
+        id: goal.id,
+        type: 'commitment',
+        title: `¡Nuevo Compromiso Público!`,
+        message: `${goalUser?.name || 'Alguien'} se comprometió a: "${goal.title}"`,
+        time: 'Reciente',
+      };
+    });
+
+  const twentyFourHoursAgo = new Date(new Date().getTime() - 24 * 60 * 60 * 1000);
+  const completedGoalNotifications = allGoals
+    .filter(goal => 
+      goal.isCompleted && 
+      goal.userId !== currentUser?.id && 
+      goal.completedAt && new Date(goal.completedAt) > twentyFourHoursAgo
+    )
+    .sort((a, b) => new Date(b.completedAt!).getTime() - new Date(a.completedAt!).getTime())
+    .map(goal => {
+      const goalUser = allUsers.find(u => u.id === goal.userId);
+      return {
+        id: `completed-${goal.id}`,
+        type: 'completed_goal',
+        title: `¡Meta Cumplida!`,
+        message: `${goalUser?.name || 'Alguien'} completó "${goal.title}" y ganó +${goal.points} puntos.`,
+        time: 'Reciente',
+      };
+    });
+
+  const allGeneratedNotifications = [
     {
-      id: '1',
+      id: 'welcome-1',
       type: 'welcome',
       title: `¡Bienvenido ${currentUser?.name}!`,
       message: userGoals.length === 0 
         ? 'Comienza creando tu primera meta diaria' 
         : `Tienes ${userGoals.length} meta${userGoals.length !== 1 ? 's' : ''} para hoy`,
       time: 'Ahora',
-    }
+    },
+    ...commitmentNotifications,
+    ...completedGoalNotifications,
   ];
+
+  const notifications = allGeneratedNotifications.filter(
+    notification => !dismissedNotificationIds.includes(notification.id)
+  );
+
+  const handleDismissNotification = (notificationId: string) => {
+    setDismissedNotificationIds(prevIds => [...prevIds, notificationId]);
+  };
 
   const formatDate = () => {
     return new Date().toLocaleDateString('es-ES', { 
@@ -237,6 +308,8 @@ const DashboardScreen: React.FC = () => {
     try {
       console.log(`🎯 Completando meta: ${goalTitle}`);
       await GoalService.completeGoal(goalId);
+      
+      // NO actualizar el usuario aquí - dejar que los puntos se calculen en tiempo real
       
       Alert.alert(
         '¡Excelente! 🏆', 
@@ -409,7 +482,7 @@ const DashboardScreen: React.FC = () => {
         </View>
         <View style={styles.headerRight}>
           <TouchableOpacity
-            style={styles.teamButton}
+            style={styles.headerButton}
             onPress={async () => {
               const userId = await getUserId();
               navigation.navigate('Team', { currentUserId: userId });
@@ -418,7 +491,7 @@ const DashboardScreen: React.FC = () => {
             <Feather name="users" size={20} color="#4299E1" />
           </TouchableOpacity>
           <View style={styles.pointsContainer}>
-            <Text style={styles.points}>{currentUser?.points || 0}</Text>
+            <Text style={styles.points}>{currentUserPoints}</Text>
             <Text style={styles.pointsLabel}>puntos</Text>
           </View>
         </View>
@@ -532,10 +605,24 @@ const DashboardScreen: React.FC = () => {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Notificaciones</Text>
           <View style={styles.notificationsList}>
-            {notifications.slice(0, 3).map(notification => (
-              <View key={notification.id} style={styles.notificationItem}>
+            {notifications.slice(0, 4).map(notification => (
+              <View key={notification.id} style={[
+                styles.notificationItem,
+                notification.type === 'commitment' && styles.commitmentNotification,
+                notification.type === 'completed_goal' && styles.completedGoalNotification,
+              ]}>
                 <View style={styles.notificationIcon}>
-                  <Feather name="star" size={16} color="#38A169" />
+                  <Feather 
+                    name={
+                      notification.type === 'commitment' ? 'target' :
+                      notification.type === 'completed_goal' ? 'check-circle' : 'star'
+                    } 
+                    size={16} 
+                    color={
+                      notification.type === 'commitment' ? '#ED8936' :
+                      notification.type === 'completed_goal' ? '#38A169' : '#38A169'
+                    } 
+                  />
                 </View>
                 <View style={styles.notificationContent}>
                   <Text style={styles.notificationTitle}>
@@ -548,8 +635,17 @@ const DashboardScreen: React.FC = () => {
                     {notification.time}
                   </Text>
                 </View>
+                <TouchableOpacity 
+                  style={styles.dismissButton}
+                  onPress={() => handleDismissNotification(notification.id)}
+                >
+                  <Feather name="x" size={16} color="#A0AEC0" />
+                </TouchableOpacity>
               </View>
             ))}
+            {notifications.length === 0 && (
+              <Text style={styles.emptyMessage}>No hay notificaciones nuevas.</Text>
+            )}
           </View>
         </View>
       </ScrollView>
@@ -649,7 +745,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
-  teamButton: {
+  headerButton: {
     padding: 8,
     backgroundColor: '#EBF8FF',
     borderRadius: 8,
@@ -928,6 +1024,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#EBF8FF',
     borderRadius: 12,
   },
+  commitmentNotification: {
+    backgroundColor: '#FFFAF0', // Un color naranja claro para diferenciar
+  },
+  completedGoalNotification: {
+    backgroundColor: '#F0FFF4', // Un color verde claro
+  },
   notificationIcon: {
     marginRight: 12,
     marginTop: 4,
@@ -950,6 +1052,10 @@ const styles = StyleSheet.create({
     color: '#718096',
     marginTop: 4,
   },
+  dismissButton: {
+    padding: 4,
+    marginLeft: 8,
+  },
   emptyMessage: {
     textAlign: 'center',
     color: '#718096',
@@ -957,7 +1063,7 @@ const styles = StyleSheet.create({
   },
   fab: {
     position: 'absolute',
-    bottom: 96,
+    bottom: 24, // Ajustado para estar más abajo
     right: 24,
     width: 56,
     height: 56,

@@ -19,10 +19,10 @@ const Tab = createBottomTabNavigator<TabParamList>();
 // Navegador de tabs principales
 const MainTabNavigator = () => {
   return (
-    <Tab.Navigator id={undefined}
+    <Tab.Navigator
       screenOptions={({ route }) => ({
         tabBarIcon: ({ focused, color, size }) => {
-          let iconName: keyof typeof Ionicons.glyphMap;
+          let iconName: keyof typeof Ionicons.glyphMap = 'home-outline';
 
           switch (route.name) {
             case 'DashboardTab':
@@ -34,8 +34,6 @@ const MainTabNavigator = () => {
             case 'ProfileTab':
               iconName = focused ? 'person' : 'person-outline';
               break;
-            default:
-              iconName = 'home-outline';
           }
 
           return <Ionicons name={iconName} size={size} color={color} />;
@@ -92,7 +90,7 @@ const MainTabNavigator = () => {
 const AppNavigator = () => {
   return (
     <NavigationContainer>
-      <Stack.Navigator  id={undefined}
+      <Stack.Navigator
         initialRouteName="Home"
         screenOptions={{ 
           headerShown: false,
@@ -100,7 +98,6 @@ const AppNavigator = () => {
           animation: 'simple_push',
         }}
       >
-        {/* Pantallas de onboarding */}
         <Stack.Screen 
           name="Home" 
           component={HomeScreen}
@@ -115,8 +112,6 @@ const AppNavigator = () => {
             gestureEnabled: false,
           }}
         />
-        
-        {/* Navegador de tabs principal */}
         <Stack.Screen 
           name="Dashboard" 
           component={MainTabNavigator}
@@ -124,8 +119,6 @@ const AppNavigator = () => {
             gestureEnabled: false,
           }}
         />
-        
-        {/* Pantallas modales/secundarias */}
         <Stack.Screen 
           name="CreateGoal" 
           component={CreateGoalScreen}

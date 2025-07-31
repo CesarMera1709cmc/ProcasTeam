@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList } from '../types/types';
 import { UserService, StoredUser } from '../services/UserService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -24,29 +25,53 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
   const [existingUsers, setExistingUsers] = useState<StoredUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    loadExistingUsers();
-  }, []);
+  // Validación defensiva para navigation
+  if (!navigation) {
+    console.error('❌ Navigation prop is undefined in HomeScreen');
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Error de navegación</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
-  const loadExistingUsers = async () => {
-    try {
+  useFocusEffect(
+    useCallback(() => {
       setIsLoading(true);
-      const users = await UserService.getAllUsers();
-      setExistingUsers(users);
-    } catch (error) {
-      console.error('Error loading users:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+      const unsubscribe = UserService.listenToUsers((users) => {
+        setExistingUsers(users);
+        setIsLoading(false);
+      });
+
+      // La función de limpieza se ejecuta cuando la pantalla pierde el foco
+      return () => unsubscribe();
+    }, [])
+  );
 
   const selectUser = (userType: string) => {
+    // Validación adicional antes de navegar
+    if (!navigation?.navigate) {
+      console.error('❌ Navigation.navigate is not available');
+      return;
+    }
+    
     // Navegar a la pantalla de captura de nombre
-    navigation.navigate('UserInput', { userType });
+    navigation.navigate('UserInput', { 
+      userType,
+      existingUsers: existingUsers.map(u => u.name.toLowerCase()) // Pasar nombres existentes
+    });
   };
 
   const selectExistingUser = async (user: StoredUser) => {
     try {
+      // Validación adicional antes de navegar
+      if (!navigation?.replace) {
+        console.error('❌ Navigation.replace is not available');
+        return;
+      }
+
       // Guardar el ID del usuario seleccionado en AsyncStorage
       await AsyncStorage.setItem('currentUserId', user.id);
       

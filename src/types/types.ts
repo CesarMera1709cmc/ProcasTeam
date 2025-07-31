@@ -1,7 +1,10 @@
 // Tipos de navegación
 export type RootStackParamList = {
   Home: undefined;
-  UserInput: { userType: string };
+  UserInput: { 
+    userType: string;
+    existingUsers?: string[];
+  };
   Dashboard: { userId?: string; userName?: string }; // Pasar parámetros al contenedor de tabs
   CreateGoal: { userId: string; userName: string };
   Team: { currentUserId: string };

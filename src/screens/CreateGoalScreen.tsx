@@ -14,9 +14,10 @@ import {
 import Feather from 'react-native-vector-icons/Feather';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { RouteProp } from '@react-navigation/native';
+import { RouteProp, useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList } from '../types/types';
 import { GoalService, Goal } from '../services/GoalService';
+import { UserService } from '../services/UserService';
 
 type CreateGoalScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'CreateGoal'>;
 type CreateGoalScreenRouteProp = RouteProp<RootStackParamList, 'CreateGoal'>;
@@ -35,12 +36,42 @@ const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ route, navigation }
     dueDate: new Date(),
     difficulty: 'easy' as 'easy' | 'medium' | 'hard',
     frequency: 'once' as 'once' | 'daily' | 'weekly',
-    isPublic: true, // Por defecto público para compartir con amigos
+    isPublic: false, // Se determinará después de la verificación
   });
 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasActivePublicGoal, setHasActivePublicGoal] = useState(true); // Asumir que tiene para deshabilitar al inicio
+  const [isCheckingGoal, setIsCheckingGoal] = useState(true);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      const checkActivePublicGoal = async () => {
+        setIsCheckingGoal(true);
+        try {
+          const userGoals = await GoalService.getUserGoals(userId);
+          const activeGoal = userGoals.find(
+            g => g.isPublic && !g.isCompleted && !g.isIncomplete
+          );
+          if (activeGoal) {
+            setHasActivePublicGoal(true);
+            setFormData(prev => ({ ...prev, isPublic: false }));
+          } else {
+            setHasActivePublicGoal(false);
+            setFormData(prev => ({ ...prev, isPublic: true }));
+          }
+        } catch (error) {
+          console.error("Error checking for active public goal:", error);
+          setHasActivePublicGoal(false); // Permitir crear si hay error
+        } finally {
+          setIsCheckingGoal(false);
+        }
+      };
+
+      checkActivePublicGoal();
+    }, [userId])
+  );
 
   const handleCreateGoal = async () => {
     const { title, description, dueDate, frequency, difficulty, isPublic } = formData;
@@ -60,12 +91,21 @@ const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ route, navigation }
     setIsLoading(true);
 
     try {
+      // Obtener el usuario actual para asegurar que usamos el Firebase key correcto
+      const currentUser = await UserService.getUser(userId);
+      if (!currentUser) {
+        throw new Error('Usuario no encontrado');
+      }
+
+      // Usar el Firebase key del usuario si está disponible, sino el ID original
+      const realUserId = currentUser.firebaseKey || currentUser.id;
+
       const points = difficulty === 'easy' ? 2 : 
                     difficulty === 'medium' ? 5 : 10;
 
       const goalData: Goal = {
-        id: `goal-${userId}-${Date.now()}`,
-        userId: userId,
+        id: `goal-${realUserId}-${Date.now()}`,
+        userId: realUserId, // Usar el Firebase key real
         title: title.trim(),
         description: description.trim(),
         difficulty,
@@ -82,6 +122,7 @@ const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ route, navigation }
       await GoalService.createGoal(goalData);
 
       console.log('✅ Meta creada exitosamente:', goalData.title);
+      console.log('👤 Usuario ID usado:', realUserId);
 
       Alert.alert(
         '¡Meta creada! 🎯', 
@@ -362,8 +403,12 @@ const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ route, navigation }
             <View style={styles.switchLabel}>
               <Text style={styles.label}>Compartir con amigos</Text>
               <Text style={styles.helpText}>
-                {formData.isPublic 
-                  ? 'Tus amigos pueden ver tu progreso' 
+                {isCheckingGoal
+                  ? 'Verificando compromisos...'
+                  : hasActivePublicGoal
+                  ? 'Ya tienes un compromiso público activo.'
+                  : formData.isPublic 
+                  ? 'Tus amigos pueden ver tu progreso y apostar' 
                   : 'Solo tú puedes ver esta meta'}
               </Text>
             </View>
@@ -372,7 +417,7 @@ const CreateGoalScreen: React.FC<CreateGoalScreenProps> = ({ route, navigation }
               onValueChange={(value) => setFormData({ ...formData, isPublic: value })}
               trackColor={{ false: '#E2E8F0', true: '#4299E1' }}
               thumbColor={formData.isPublic ? '#FFFFFF' : '#FFFFFF'}
-              disabled={isLoading}
+              disabled={isLoading || hasActivePublicGoal || isCheckingGoal}
             />
           </View>
         </View>
